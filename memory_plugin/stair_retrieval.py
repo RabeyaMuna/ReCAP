@@ -23,6 +23,7 @@ from utilities.llm_invoker import (
 )
 from utilities.run_metrics import extract_usage, response_cost_usd, estimate_cost_usd
 import time
+from memory_plugin.memory_optimizer import optimize_memories
 
 
 class DecompositionGenerationError(RuntimeError):
@@ -333,7 +334,7 @@ class STAIRRetrieval:
 
             if not matches or len(matches) == 0:
                 # No retrieval results - add CI problem without enrichment
-                print(f"[Memory]     ✗ No memory retrieval results")
+                print(f"[Memory]     FAIL No memory retrieval results")
                 problems_list.append({
                     **ci_prob,
                     "problem_type": "ci_failure",
@@ -348,7 +349,7 @@ class STAIRRetrieval:
 
             if not filtered or len(filtered) == 0:
                 # Filtering removed all matches
-                print(f"[Memory]     ✗ All matches filtered out - no relevant memory")
+                print(f"[Memory]     FAIL All matches filtered out - no relevant memory")
                 problems_list.append({
                     **ci_prob,
                     "problem_type": "ci_failure",
@@ -368,7 +369,7 @@ class STAIRRetrieval:
                 enriched = enriched_list[0]
                 problems_list.append(enriched)
                 total_enriched += 1
-                print(f"[Memory]     ✓ Enriched with repair strategy")
+                print(f"[Memory]     OK Enriched with repair strategy")
             else:
                 # Filtered matches didn't enrich - add without repair strategy
                 enriched = {
@@ -379,7 +380,7 @@ class STAIRRetrieval:
                 }
                 problems_list.append(enriched)
                 total_enriched += 1
-                print(f"[Memory]     ✗ Enrichment failed - added without repair strategy")
+                print(f"[Memory]     FAIL Enrichment failed - added without repair strategy")
 
             # STAGE 4: Extract dependencies for THIS CI problem
             related = self._stage_4_extract_related_problems([match_set], [enriched])
@@ -390,9 +391,9 @@ class STAIRRetrieval:
             if related:
                 problems_list.extend(related)
                 total_dependencies += dep_count
-                print(f"[Memory]     ✓ Found {dep_count} dependency problem(s)")
+                print(f"[Memory]     OK Found {dep_count} dependency problem(s)")
             else:
-                print(f"[Memory]     ✗ No dependency problems")
+                print(f"[Memory]     FAIL No dependency problems")
 
         print(f"[Memory] STAGE 1-4: Completed {total_enriched} CI problems, {total_dependencies} dependencies")
 
@@ -454,7 +455,7 @@ class STAIRRetrieval:
         print("\n[Memory] FINAL PROBLEMS LIST:")
         for i, p in enumerate(valid_problems, 1):
             ptype = p.get('problem_type', 'unknown')
-            has_repair = "✓" if p.get("repair_strategy") else "✗"
+            has_repair = "OK" if p.get("repair_strategy") else "FAIL"
             print(f"  {i}. [{ptype}] [repair:{has_repair}] {p.get('problem', 'N/A')[:70]}")
         print()
 
@@ -570,69 +571,288 @@ class STAIRRetrieval:
             ci_prob = match_set["ci_problem"]
             print(f"[Memory]   Enriching problem {idx+1}: {ci_prob.get('problem', 'N/A')[:50]}...")
 
+            l1_opt, l2_opt, l3_opt = optimize_memories(
+                match_set["l1_filtered"], match_set["l2_filtered"], match_set["l3_filtered"])
+
             compact = {
                 "l1": [
                     self._compact_retrieved_item(item, "L1", i, include_dependencies=True)
-                    for i, item in enumerate(match_set["l1_filtered"])
+                    for i, item in enumerate(l1_opt)
                 ],
                 "l2": [
                     self._compact_retrieved_item(item, "L2", i, include_dependencies=True)
-                    for i, item in enumerate(match_set["l2_filtered"])
+                    for i, item in enumerate(l2_opt)
                 ],
                 "l3": [
                     self._compact_retrieved_item(item, "L3", i, include_dependencies=True)
-                    for i, item in enumerate(match_set["l3_filtered"])
+                    for i, item in enumerate(l3_opt)
                 ],
             }
 
-            prompt = f"""Match CI problem with memory and extract repair strategy.
+            prompt = f"""You are an expert at learning from historical fixes and transferring knowledge to solve new problems.
 
-**CI Problem:**
+**TASK**: Analyze historical fixes in memory and determine what can be transferred to solve the current CI problem.
+
+**SIMILARITY-BASED ADAPTATION**:
+
+Step 1: **ASSESS SIMILARITY** between historical problem and current problem
+- Completely similar: Same error, same tool, same problem type
+- Partially similar: Same problem type, different context
+- Conceptually similar: Same underlying issue, different manifestation
+
+Step 2: **DETERMINE TRANSFERABILITY** using logic and reasoning
+- What parts of the historical fix are applicable?
+- What parts need adaptation?
+- What parts are context-specific and cannot transfer?
+
+Step 3: **ADAPT BASED ON SIMILARITY**:
+- High similarity: Transfer approach with minimal adaptation
+- Medium similarity: Extract core methodology, adapt to current context
+- Low similarity: Extract only the general principle, build new approach
+
+**KEY PRINCIPLE - INTELLIGENT TRANSFER**:
+Do NOT blindly copy historical fixes.
+Use LOGIC and REASONING to determine:
+- Which aspects of the historical approach apply to current problem
+- How to adapt the approach to current files/context
+- What needs to change vs what stays the same
+
+**CRITICAL RULE**:
+Historical problems show EXAMPLES of problem-solving approaches.
+You must THINK about what's applicable and adapt accordingly.
+NEVER copy file paths or commands without reasoning about current context.
+
+**CI Problem to Solve:**
 ```json
 {json.dumps(ci_prob, indent=2)}
 ```
 
-**Memory Matches (L1/L2/L3):**
+**Available Memory (L1/L2/L3):**
 ```json
 {json.dumps(compact, indent=2)}
 ```
 
-**Task:**
-1. Check if this CI problem has similar fixes in memory (L1/L2/L3)
-2. If match found → Extract repair strategy using **best available data**:
+**MATCHING PHILOSOPHY - Think Like an Expert Developer:**
 
-**Strategy Selection (adaptive):**
-- **If L2 available**: Use L2.key_actions as actions, L2.summary as summary, L2.pitfalls as pitfalls
-  - L2 `key_actions` are already detailed step-by-step - copy verbatim!
-- **Else if L3 available**: Use L3.universal_fix.steps as actions, L3.approach as summary
-- **Else if only L1 available**: Convert L1.fix_strategy narrative into structured action steps
-  - Parse the narrative and extract concrete steps
-  - Example: "Added helper function that checks..." → ["Add helper function", "Check condition", ...]
+1. **Focus on ROOT CAUSE COMPATIBILITY, not surface details**
+   - Different files, repos, error messages are OK if the UNDERLYING PROBLEM is the same
+   - Example: "import sorting error in file A" and "import sorting error in file B" → SAME root cause → Compatible!
+   - Example: "type error in X" and "type error in Y" → SAME category → Check if solution approach applies
 
-3. If NO match in any level → Return problem as-is (repair_strategy = null)
+2. **Look for SOLUTION APPROACH COMPATIBILITY**
+   - Ask: "Would the repair approach from memory work for this CI problem?"
+   - If memory says "run linter to fix formatting" → Is current problem also fixable by linter? → YES → Compatible!
+   - If memory says "add missing import" → Is current problem also about missing import? → YES → Compatible!
+   - If memory says "fix type annotations" → Is current problem also about types? → YES → Compatible!
 
-**IMPORTANT:**
-- Check what levels actually have data for this problem
-- Use the most structured data available
-- DO NOT simplify detailed actions to generic "Analyze and fix"
+3. **Recognize TOOL/TECHNIQUE PATTERNS**
+   - Same tools (ruff, black, mypy, pytest) → Often same fixes
+   - Same error categories (linting, formatting, type-checking) → Often same approaches
+   - Same symptoms (CI fails at check step) → Often same solutions
 
-**Return JSON:**
+4. **Abstract to UNIVERSAL PATTERNS**
+   - "Import block unsorted in diffusers" ≈ "Import block unsorted in accelerate" → SAME FIX
+   - "Linter complains about formatting" → Universal fix: "Run auto-formatter"
+   - "Type checker fails" → Universal fix: "Add/fix type annotations"
+
+5. **Adapt the Strategy Intelligently**
+   - Extract the repair approach from memory
+   - Adapt file names, paths, commands to current CI problem
+   - Keep the ESSENCE of the fix, change the SPECIFICS
+   - Example: Memory has "ruff check tests/test.py" → Adapt to "ruff check <current_file>"
+
+**WHEN TO RETURN NULL (Be Conservative, Not Overly Strict):**
+- ONLY if the problems are fundamentally different AND no approach is transferable
+- Examples of TRUE mismatches:
+  - Memory: "Fix database schema" vs CI: "Python syntax error" → Different domains
+  - Memory: "Install missing dependency" vs CI: "Runtime crash in logic" → Different categories
+- Do NOT return null just because:
+  - Files are different (same tool/approach can work on different files)
+  - Repos are different (linting is universal across repos)
+  - Error messages are slightly different (focus on the ROOT CAUSE)
+
+**EXTRACTION STRATEGY (Prioritized):**
+1. **If L2 available and compatible**:
+   - Use L2.key_actions (already step-by-step) → Adapt to current problem
+   - Use L2.summary → Generalize to current context
+   - Use L2.pitfalls → Keep if still relevant
+
+2. **Else if L3 available and compatible**:
+   - Use L3.fix_strategy → Parse into concrete steps
+   - Use L3.why_fix_works → Extract approach
+
+3. **Else if L1 available**:
+   - Use L1.universal_fix → Already generic, apply directly
+   - Use L1.signals → Verify compatibility
+
+**INTELLIGENT ADAPTATION PROCESS**:
+
+WARNING: Do NOT blindly copy from memory. Use reasoning to determine what transfers.
+
+**Step 1: ANALYZE SIMILARITY**
+Compare historical problem with current problem:
+- Problem type match? (linting vs linting, typing vs typing)
+- Tool match? (ruff vs ruff, black vs black)
+- Root cause match? (import sorting vs import sorting)
+
+**Step 2: DETERMINE WHAT TRANSFERS**
+Based on similarity, decide:
+
+A. **HIGH SIMILARITY** (same tool, same issue type):
+   - Core approach transfers completely
+   - Change only: file paths, repo-specific paths
+   - Keep: tool names, flags, logical steps
+   - Example: "ruff I001" in history → "ruff I001" in current
+     Transfer: Run ruff with same flags, different files
+
+B. **MEDIUM SIMILARITY** (same category, different tool):
+   - Methodology transfers, implementation differs
+   - Extract: general principle (use auto-formatter)
+   - Adapt: specific tool for current context
+   - Example: "black" in history → might use "ruff format" in current
+     Transfer: Concept of auto-formatting, adapt tool choice
+
+C. **LOW SIMILARITY** (conceptual overlap only):
+   - Only general principle transfers
+   - Build new approach based on learned principle
+   - Example: "fix imports" concept transfers to "fix types"
+     Transfer: Systematic fixing approach, not specific commands
+
+**Step 3: ADAPT SPECIFICS TO CURRENT CONTEXT**
+
+NEVER copy these from memory:
+- File paths (always use current problem's files)
+- Repo-specific paths
+- Project-specific commands
+
+ALWAYS preserve these from memory:
+- Problem-solving logic
+- Tool usage patterns (when tools match)
+- Step ordering (if applicable)
+- Pitfalls and warnings (if still relevant)
+
+**Step 4: CONSTRUCT ADAPTED STRATEGY**
+- Use current problem's files from "files" field
+- Apply learned approach to those files
+- Keep logical flow from memory
+- Add context-specific adaptations
+
+**EXAMPLE OF CORRECT ADAPTATION:**
+
+Memory:
+```
+{
+  "fix": "Run ruff --fix src/old_file.py",
+  "files": ["src/old_file.py"]
+}
+```
+
+Current CI Problem:
+```
+{
+  "files": ["examples/new_file.py", "tests/another.py"]
+}
+```
+
+CORRECT Output:
+```
+{
+  "actions": [
+    "Run: ruff --fix examples/new_file.py",
+    "Run: ruff --fix tests/another.py",
+    "Verify all files pass"
+  ]
+}
+```
+
+WRONG Output (copying from memory):
+```
+{
+  "actions": [
+    "Run: ruff --fix src/old_file.py"  ← BAD! This is from memory, not current problem!
+  ]
+}
+```
+
+**OUTPUT:**
+Return a JSON with the CI problem enriched with an adapted repair_strategy.
+
+**CRITICAL**: In the "actions", you MUST use the CURRENT problem's files, not files from memory! or  directly adapted commands. The essence of the repair strategy can be transferred, but specifics must be adapted to the current context.
+
+**Template:**
 ```json
 {{
-  "problem": "CI problem description",
-  "root_cause": "Root cause (from CI or enhanced from memory)",
-  "files": ["file1.py"],
-  "failure_type": "type_checking",
-  "failure_signals": ["error 1", "error 2"],
-  "verification_cmd": "./test.sh",
+  "problem": "<Copy from CI problem>",
+  "root_cause": "<Copy from CI problem or enhance from memory>",
+  "files": <Copy EXACT files list from CI problem - do NOT change>,
+  "failure_type": "<Copy from CI problem>",
+  "failure_signals": <Copy from CI problem>,
+  "verification_cmd": "<Adapt from memory using current files>",
   "problem_type": "ci_failure",
   "repair_strategy": {{
-    "summary": "High-level repair approach",
-    "actions": ["step 1", "step 2", "step 3"],
-    "pitfalls": ["avoid this", "watch that"]
-  }} // OR null if no match
+    "summary": "<High-level approach extracted from memory>",
+    "actions": [
+      "<Step 1: Use tool/command from memory BUT on files from CI problem>",
+      "<Step 2: Same tool/approach BUT adapted to current context>",
+      "<Step 3: Verification using current files/commands>"
+    ],
+    "pitfalls": [
+      "<Relevant pitfall from memory>",
+      "<Another relevant pitfall>"
+    ]
+  }}
 }}
 ```
+
+**CONCRETE EXAMPLE:**
+
+Given CI Problem:
+```json
+{{
+  "files": ["examples/community/ip_adapter.py"],
+  "failure_signals": ["ruff I001: Import block unsorted"]
+}}
+```
+
+And Memory shows:
+```json
+{{
+  "fix": "Run ruff --fix tests/old_file.py",
+  "files": ["tests/old_file.py"]
+}}
+```
+
+CORRECT Output:
+```json
+{{
+  "files": ["examples/community/ip_adapter.py"],
+  "repair_strategy": {{
+    "summary": "Fix import sorting using ruff auto-formatter",
+    "actions": [
+      "Run: ruff check --select I001 --fix examples/community/ip_adapter.py",
+      "Verify: ruff check examples/community/ip_adapter.py"
+    ]
+  }}
+}}
+```
+
+WRONG Output (copying memory's files):
+```json
+{{
+  "files": ["examples/community/ip_adapter.py"],
+  "repair_strategy": {{
+    "actions": [
+      "Run: ruff check --select I001 --fix tests/old_file.py"  ← WRONG FILE!
+    ]
+  }}
+}}
+```
+
+**IMPORTANT:**
+- Be INTELLIGENT about matching - look beyond surface details to the essence
+- ADAPT strategies to current context - don't just copy verbatim
+- ONLY return null if NO approach from memory is transferable
+- If uncertain, TRY to adapt rather than return null - help the agent!
 
 {STRICT_JSON_RULES}
 """
@@ -651,7 +871,7 @@ class STAIRRetrieval:
 
             enriched.append(enriched_prob)
 
-            has_repair = "✓" if enriched_prob.get("repair_strategy") else "✗"
+            has_repair = "OK" if enriched_prob.get("repair_strategy") else "FAIL"
             print(f"[Memory]     Repair strategy: {has_repair}")
 
         return enriched
@@ -909,9 +1129,9 @@ Use `problem_type: "dependency"` for all returned problems.
                                 level_problems = level_result.get("problems", [])
                                 valid_level = [p for p in level_problems if p and isinstance(p, dict) and self._is_valid_problem(p)]
                                 all_level_problems.extend(valid_level)
-                                print(f"[Memory] STAGE 4:   {level_name} ✓ {len(valid_level)} dependencies found")
+                                print(f"[Memory] STAGE 4:   {level_name} OK {len(valid_level)} dependencies found")
                             except Exception as e:
-                                print(f"[Memory] STAGE 4:   {level_name} ✗ {str(e)[:80]}")
+                                print(f"[Memory] STAGE 4:   {level_name} FAIL {str(e)[:80]}")
 
                         problems = all_level_problems
                         print(f"[Memory] STAGE 4: 🔄 Fallback completed: {len(problems)} total dependencies")
@@ -945,18 +1165,18 @@ Use `problem_type: "dependency"` for all returned problems.
                                     retry_problems = retry_result.get("problems", [])
                                     valid_retry = [p for p in retry_problems if p and isinstance(p, dict) and self._is_valid_problem(p)]
                                     all_retry_problems.extend(valid_retry)
-                                    print(f"[Memory] STAGE 4:   Retry {retry_num + 1} ✓ {len(valid_retry)} dependencies found")
+                                    print(f"[Memory] STAGE 4:   Retry {retry_num + 1} OK {len(valid_retry)} dependencies found")
                                     break  # Success - stop retrying
                                 else:
-                                    print(f"[Memory] STAGE 4:   Retry {retry_num + 1} ✗ Still empty")
+                                    print(f"[Memory] STAGE 4:   Retry {retry_num + 1} FAIL Still empty")
                             except Exception as e:
-                                print(f"[Memory] STAGE 4:   Retry {retry_num + 1} ✗ {str(e)[:80]}")
+                                print(f"[Memory] STAGE 4:   Retry {retry_num + 1} FAIL {str(e)[:80]}")
 
                         problems = all_retry_problems
                         if problems:
                             print(f"[Memory] STAGE 4: 🔄 Fallback completed: {len(problems)} total dependencies")
                         else:
-                            print(f"[Memory] STAGE 4: ✗ All retries failed - skipping dependency extraction")
+                            print(f"[Memory] STAGE 4: FAIL All retries failed - skipping dependency extraction")
                 else:
                     result = response if isinstance(response, dict) else {"problems": response} if isinstance(response, list) else {}
                     problems = result.get("problems", [])
@@ -2233,13 +2453,13 @@ Compare the problems and check if they have:
 
 **Decision Rules:**
 
-✓ **MERGE into ONE** if all 3 criteria match:
+OK **MERGE into ONE** if all 3 criteria match:
 - Problem variants are the same (e.g., "mypy fails on DTypeLike" = "DTypeLike type error")
 - Root cause is the same (e.g., "NumPy 2.0 removed DTypeLike")
 - Fix strategy is the same (e.g., "Update type annotations")
 - When merging: Combine ALL files, failure_signals from all problems into one
 
-✗ **KEEP SEPARATE** if any criteria differ:
+FAIL **KEEP SEPARATE** if any criteria differ:
 - Different problems (e.g., "mypy error" vs "pylint error")
 - Different root causes (e.g., "missing import" vs "wrong type")
 - Different fix strategies (e.g., "upgrade dependency" vs "fix code")
@@ -2251,9 +2471,9 @@ Problem 1: "mypy fails on numpy DTypeLike in typing.py", files: ["src/typing.py"
 Problem 2: "DTypeLike type annotation error in mypy", files: ["src/utils.py", "src/models.py"]
 
 Analysis:
-- Problem: ✓ Same (both about DTypeLike type error)
-- Root cause: ✓ Same (NumPy 2.0 removed DTypeLike)
-- Fix strategy: ✓ Same (update type annotations)
+- Problem: OK Same (both about DTypeLike type error)
+- Root cause: OK Same (NumPy 2.0 removed DTypeLike)
+- Fix strategy: OK Same (update type annotations)
 
 → **MERGE** into one problem with files: ["src/typing.py", "src/utils.py", "src/models.py"]
 
@@ -3084,12 +3304,12 @@ For EACH cluster, analyze the `problems` field (list of all problem instances in
 **Example - Cluster with 24 problem instances:**
 
 Problem descriptions:
-- "Missing type annotation for Optional[Any] variables" → 15 occurrences ✓ MOST COMMON
+- "Missing type annotation for Optional[Any] variables" → 15 occurrences OK MOST COMMON
 - "Type error in Optional handling" → 8 occurrences
 - "mypy arg-type error" → 1 occurrence
 
 Repair strategies:
-- "Add None guard before accessing" → 12 occurrences ✓ MOST COMMON
+- "Add None guard before accessing" → 12 occurrences OK MOST COMMON
 - "Add type annotation" → 10 occurrences
 - "Use isinstance check" → 2 occurrences
 

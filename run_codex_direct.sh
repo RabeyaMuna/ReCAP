@@ -1,7 +1,7 @@
 #!/bin/bash
 # Run Codex with any model via OpenRouter
 #
-# Usage: ./run_codex_direct.sh <issue-ids> [ablation] [direction] [model] [repo_filters] [dataset] [workers] [timeout]
+# Usage: ./run_codex_direct.sh <issue-ids> [ablation] [direction] [model] [repo_filters] [dataset] [workers] [timeout-or-slice] [slice]
 #   <issue-ids>: Comma-separated IDs, or empty string "" to use eval_issue_ids.json, or omit to RUN ALL
 #   [ablation]:  baseline|L1|L2|L3|L1+L2|L1+L2+L3|all   (default: all)
 #   [direction]: backward|forward|bidirectional|both|none (default: both; "none" → backward for baseline)
@@ -10,7 +10,9 @@
 #                   (overrides <issue-ids>)
 #   [dataset]:   Path to eval_set.jsonl (default: data/eval_set.jsonl)
 #   [workers]:   Parallel issues per ablation (default: 1)
-#   [timeout]:   Timeout per problem in seconds (default: 3600 = 1 hour, Codex official)
+#   [timeout-or-slice]: Timeout in seconds (default: 3600), or a Python-style issue range
+#                       such as 0:190 when the default timeout is acceptable
+#   [slice]:     Optional issue range when an explicit timeout is also supplied
 #
 #   Examples:
 #     # Run ALL ablations and BOTH directions for all issues in eval_issue_ids.json using GPT‑5‑mini
@@ -24,6 +26,9 @@
 #     # Run several repos, including all owners of the short name "agno"
 #     ./run_codex_direct.sh "" L1+L2+L3 forward deepseek-v4-flash \
 #       "agno,axolotl,owner/demo-repo" data/eval_set.jsonl 4
+#     # Run the first 190 evaluation issue IDs (indices 0 through 189)
+#     ./run_codex_direct.sh "" L1+L2+L3 forward minimax/minimax-m2.5 \
+#       "" data/eval_set.jsonl 4 0:190
 
 set -e
 
@@ -44,7 +49,16 @@ MODEL=${4:-gpt-5-mini}
 REPO_FILTERS=${5:-}
 DATASET=${6:-data/eval_set.jsonl}
 WORKERS=${7:-1}
-TIMEOUT=${8:-3600}  # Use Codex's official default: 1 hour per problem
+ARG8=${8:-}
+ARG9=${9:-}
+if [[ "$ARG8" == *:* ]] && [ -z "$ARG9" ]; then
+    # Allow callers to omit the default timeout and pass the slice directly.
+    TIMEOUT=3600
+    ISSUE_SLICE="$ARG8"
+else
+    TIMEOUT=${ARG8:-3600}  # Codex's official default: 1 hour per problem
+    ISSUE_SLICE="$ARG9"
+fi
 RESULTS_ROOT=${CODEX_RESULTS_ROOT:-results/codex}
 
 # Sandbox mode: Set CODEX_SANDBOX=none to disable sandboxing for restricted servers
@@ -85,6 +99,9 @@ echo "Ablation:  $ABLATION"
 echo "Direction: $DIRECTION"
 echo "Model:     $MODEL"
 echo "Sandbox:   $SANDBOX_MODE"
+if [ -n "$ISSUE_SLICE" ]; then
+    echo "Slice:     $ISSUE_SLICE (end-exclusive)"
+fi
 if [ -n "$REPO_FILTERS" ]; then
     echo "Repos:     $REPO_FILTERS (filter from $DATASET)"
 fi
@@ -184,6 +201,11 @@ case "${CODEX_RESUME:-1}" in
         ;;
 esac
 
+SLICE_ARGS=()
+if [ -n "$ISSUE_SLICE" ]; then
+    SLICE_ARGS=(--slice "$ISSUE_SLICE")
+fi
+
 # Build the run function for one combo
 run_one() {
     local ablation="$1"; local direction="$2"
@@ -230,6 +252,7 @@ run_one() {
             --output-root "$direction_output_root" \
             $memory_args \
             "${RESUME_ARGS[@]}" \
+            "${SLICE_ARGS[@]}" \
             --workers "$WORKERS" \
             --timeout "$TIMEOUT" \
             --codex-command "$CODEX_CMD"
@@ -242,6 +265,7 @@ run_one() {
             --output-root "$direction_output_root" \
             $memory_args \
             "${RESUME_ARGS[@]}" \
+            "${SLICE_ARGS[@]}" \
             --workers "$WORKERS" \
             --timeout "$TIMEOUT" \
             --codex-command "$CODEX_CMD"
