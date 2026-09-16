@@ -741,37 +741,37 @@ ALWAYS preserve these from memory:
 
 Memory:
 ```
-{
+{{
   "fix": "Run ruff --fix src/old_file.py",
   "files": ["src/old_file.py"]
-}
+}}
 ```
 
 Current CI Problem:
 ```
-{
+{{
   "files": ["examples/new_file.py", "tests/another.py"]
-}
+}}
 ```
 
 CORRECT Output:
 ```
-{
+{{
   "actions": [
     "Run: ruff --fix examples/new_file.py",
     "Run: ruff --fix tests/another.py",
     "Verify all files pass"
   ]
-}
+}}
 ```
 
 WRONG Output (copying from memory):
 ```
-{
+{{
   "actions": [
     "Run: ruff --fix src/old_file.py"  ← BAD! This is from memory, not current problem!
   ]
-}
+}}
 ```
 
 **OUTPUT:**

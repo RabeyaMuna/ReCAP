@@ -50,6 +50,8 @@ def get_model_max_output_tokens(model_name: str, default: int = 16000) -> int:
     """
     Get the maximum output tokens for a model based on its capabilities.
 
+    Now uses centralized model_token_config.py for consistency.
+
     Args:
         model_name: Model identifier (e.g., "deepseek-v4-flash", "gpt-4o-mini")
         default: Default value if model is unknown
@@ -60,43 +62,13 @@ def get_model_max_output_tokens(model_name: str, default: int = 16000) -> int:
     if not model_name:
         return default
 
-    normalized = str(model_name).lower().removeprefix("openai/").removeprefix("azure/")
-
-    # DeepSeek models - massive output capacity
-    if "deepseek" in normalized:
-        if "v4" in normalized or "v3" in normalized:
-            return 384000  # DeepSeek V3/V4: 384K output
-        return 100000  # Older DeepSeek: conservative 100K
-
-    # GPT-5 series - large output
-    if normalized.startswith("gpt-5"):
-        return 64000  # GPT-5: ~64K output
-
-    # GPT-4o series
-    if normalized.startswith("gpt-4o"):
-        if "mini" in normalized:
-            return 16000  # GPT-4o-mini: 16K output
-        return 16000  # GPT-4o: 16K output
-
-    # o-series reasoning models
-    if len(normalized) > 1 and normalized[0] == "o" and normalized[1].isdigit():
-        return 100000  # o1/o3 series: 100K output
-
-    # Claude models
-    if "claude" in normalized or "sonnet" in normalized or "opus" in normalized:
-        return 8192  # Claude: 8K output (most variants)
-
-    # MiniMax models
-    if "minimax" in normalized:
-        return 32768  # MiniMax M2.5: 32K max output (204K context total)
-
-    # GLM models
-    if "glm" in normalized:
-        return 131072  # GLM 5.2: 131K max output (1M context total)
-
-    # Gemini models
-    if "gemini" in normalized:
-        return 8192  # Gemini: 8K output
+    try:
+        from utilities.model_token_config import get_model_config
+        config = get_model_config(model_name)
+        return config["output_safe_tokens"]
+    except Exception:
+        # Fallback to conservative default if config lookup fails
+        return default
 
     # Default for unknown models
     return default

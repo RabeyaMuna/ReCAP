@@ -111,21 +111,21 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
         "supports_large_output": True,  # Supports large outputs (128k)
     },
     "deepseek-v4-flash": {
-        "input_context_window": 1_000_000,  # DeepSeek-V4-Flash: 1M context window
-        "input_chunk_tokens": 600_000,  # Use model capacity: 600k input + 384k output + overhead fits 1M
-        "input_chunk_chars": 2_400_000,  # ~4 chars per token (600k * 4)
-        "output_max_tokens": 384_000,  # DeepSeek-V4-Flash: 384K max output
-        "output_safe_tokens": 350_000,  # Safe limit with buffer (~91% of max)
-        # L1/L2 settings scale with model capacity - processing logic dynamically chunks
-        "l1_chunk_size": 500,  # Proportional to context window
-        "l1_max_total": 2000,  # Proportional to context window
-        "l2_batch_size": 500,  # Proportional to context window
-        "l2_common_candidates": 6000,  # Proportional to context window
-        "l2_consecutive_candidates": 8000,  # Proportional to context window
-        "decompose_max_files_per_chunk": 3000,  # Proportional to context window
-        "decompose_max_changes_per_chunk": 15000,  # Proportional to context window
+        "input_context_window": 163_840,  # OpenRouter API limit (actual limit, not native spec)
+        "input_chunk_tokens": 100_000,  # Conservative: 100k input + 8k prompt + 50k output = 158k
+        "input_chunk_chars": 400_000,  # ~4 chars per token (100k * 4)
+        "output_max_tokens": 55_000,  # Conservative to fit in 163k context with headroom
+        "output_safe_tokens": 50_000,  # Safe limit with buffer (~91% of max)
+        # L1/L2 settings adjusted for smaller context
+        "l1_chunk_size": 40,  # Similar to gpt-5
+        "l1_max_total": 160,  # Similar to gpt-5
+        "l2_batch_size": 50,  # Similar to gpt-5
+        "l2_common_candidates": 300,  # Similar to gpt-5
+        "l2_consecutive_candidates": 400,  # Similar to gpt-5
+        "decompose_max_files_per_chunk": 200,  # Similar to gpt-5
+        "decompose_max_changes_per_chunk": 1000,  # Similar to gpt-5
         "requires_multi_stage": False,  # Single-stage processing
-        "supports_large_output": True,  # Supports massive outputs (384k)
+        "supports_large_output": True,  # Still supports 50k+ outputs
     },
     # Fallback/default configuration
     "default": {
