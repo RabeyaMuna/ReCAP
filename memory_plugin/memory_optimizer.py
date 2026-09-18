@@ -14,17 +14,25 @@ def optimize_memories(
     max_total_size: int = 100000  # ~100K tokens
 ) -> tuple[List[Dict], List[Dict], List[Dict]]:
     """
-    Smart memory optimization:
-    1. Remove duplicate information across L1/L2/L3
-    2. Skip L3 if L1+L2 are sufficient
+    Smart memory optimization with complementary level strategy:
+
+    L1 (Similar Issues) = Concrete code changes (ground truth)
+    L2 (Common Patterns) = How to solve easily (approach/methodology)
+    L3 (Cross-repo) = How it was solved elsewhere (often noise)
+
+    Strategy:
+    1. L1 + L2 are COMPLEMENTARY (concrete + approach) - never deduplicate
+    2. Use L3 ONLY when BOTH L1 AND L2 are empty
     3. Prioritize L1 > L2 > L3 if too large
 
     Returns: (filtered_l1, filtered_l2, filtered_l3)
     """
 
-    # Step 1: Deduplicate across levels
-    l1_deduped = l1_matches  # Never filter L1
-    l2_deduped = _deduplicate_against(l2_matches, l1_matches)
+    # Step 1: NEVER deduplicate L2 against L1!
+    # L1 = concrete changes, L2 = approach/methodology
+    # They are complementary, not redundant
+    l1_deduped = l1_matches  # Keep all L1 (concrete solutions)
+    l2_deduped = l2_matches  # Keep all L2 (approaches) - different dimension!
     l3_deduped = _deduplicate_against(l3_matches, l1_matches + l2_deduped)
 
     # Step 2: Check size
@@ -33,21 +41,26 @@ def optimize_memories(
     l3_size = _estimate_size(l3_deduped)
     total_size = l1_size + l2_size + l3_size
 
-    # Step 3: If L1+L2 are sufficient and fit, skip L3
-    if _is_sufficient(l1_deduped, l2_deduped) and (l1_size + l2_size <= max_total_size):
-        print(f"[Optimizer] ✅ L1+L2 sufficient ({l1_size + l2_size} chars), skipping L3")
+    # Step 3: If L1 OR L2 exist, skip L3 (L1+L2 provide complete solution)
+    # L1 = what changed (concrete), L2 = how to solve (approach)
+    if len(l1_deduped) > 0 or len(l2_deduped) > 0:
+        print(f"[Optimizer] ✅ L1={len(l1_deduped)} (concrete) or L2={len(l2_deduped)} (approach) exist, skipping L3")
         return l1_deduped, l2_deduped, []
 
-    # Step 4: If everything fits, use all
-    if total_size <= max_total_size:
-        print(f"[Optimizer] ✅ All levels fit ({total_size} chars)")
-        return l1_deduped, l2_deduped, l3_deduped
+    # Step 4: L1 and L2 are BOTH empty - use L3 as last resort
+    if len(l3_deduped) > 0:
+        print(f"[Optimizer] ⚠️ L1+L2 empty, using L3 as fallback ({len(l3_deduped)} matches)")
+        if l3_size <= max_total_size:
+            return [], [], l3_deduped
+        else:
+            # L3 too large, truncate
+            l3_truncated = _truncate_to_size(l3_deduped, max_total_size)
+            print(f"[Optimizer] 🔄 Truncated L3: {len(l3_deduped)} → {len(l3_truncated)} matches")
+            return [], [], l3_truncated
 
-    # Step 5: Too large - prioritize L1 > L2 > L3
-    print(f"[Optimizer] ⚠️ Too large ({total_size} chars), prioritizing...")
-    return _prioritize_by_importance(
-        l1_deduped, l2_deduped, l3_deduped, max_total_size
-    )
+    # Step 5: Nothing at any level
+    print(f"[Optimizer] ❌ No relevant matches at any level")
+    return [], [], []
 
 
 def _deduplicate_against(
@@ -99,12 +112,16 @@ def _get_match_signature(match: Dict) -> str:
 
 
 def _is_sufficient(l1: List[Dict], l2: List[Dict]) -> bool:
-    """Check if L1+L2 have enough context"""
-    return (
-        len(l1) >= 3 or      # Have 3+ similar fixes
-        len(l2) >= 5 or      # Have 5+ common patterns
-        len(l1) + len(l2) >= 8  # Total of 8+ memories
-    )
+    """
+    Check if L1+L2 have relevant matches.
+
+    L1 + L2 are complementary:
+    - L1 = concrete code changes (ground truth)
+    - L2 = how to solve easily (approach)
+
+    ANY match in L1 or L2 means we have relevant info.
+    """
+    return len(l1) > 0 or len(l2) > 0
 
 
 def _estimate_size(matches: List[Dict]) -> int:

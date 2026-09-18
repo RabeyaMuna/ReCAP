@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """
-Run ThinkRepair baseline on CI-repair benchmark.
-Saves results in: results/think_repair/baseline_{model}/preds.json
+Run ThinkRepair baseline: Generate plans that are passed to minisweagent.
+
+Flow:
+1. ThinkRepair generates plan using knowledge pool
+2. Plan is passed to minisweagent for patch generation
+3. Results saved in: results/think_repair/baseline_{model}/
 
 Usage:
     python baseline_think_repair/run_baseline.py \
         --eval_data data/eval_set.jsonl \
-        --model deepseek-v4-flash \
-        --k_shot 0
+        --model minimax-m2_5 \
+        --k_shot 2 \
+        --knowledge_pool baseline_think_repair/knowledge_pool_minimax.json
 """
 
 import argparse
@@ -19,31 +24,38 @@ from tqdm import tqdm
 # Add parent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from baseline_think_repair.wrapper import generate_patch_thinkrepair
+from baseline_think_repair.wrapper import generate_plan_thinkrepair
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run ThinkRepair baseline")
+    parser = argparse.ArgumentParser(description="Run ThinkRepair baseline (plan generation)")
     parser.add_argument("--eval_data", default="data/eval_set.jsonl", help="Path to eval_set.jsonl")
-    parser.add_argument("--model", default="deepseek-v4-flash", help="Model to use")
-    parser.add_argument("--k_shot", type=int, default=0, help="Number of few-shot examples (0=zero-shot)")
-    parser.add_argument("--max_interactions", type=int, default=5, help="Max iterations")
-    parser.add_argument("--knowledge_pool", default=None, help="Path to knowledge pool JSON")
+    parser.add_argument("--model", default="minimax-m2_5", help="Model to use")
+    parser.add_argument("--k_shot", type=int, default=2, help="Number of few-shot examples (0=zero-shot)")
+    parser.add_argument("--knowledge_pool", default="baseline_think_repair/knowledge_pool_minimax.json",
+                        help="Path to knowledge pool JSON")
     parser.add_argument("--start_from", type=str, default=None, help="Start from this instance_id (resume)")
+    parser.add_argument("--output_dir", default=None, help="Output directory (default: results/think_repair/baseline_{model})")
 
     args = parser.parse_args()
 
     # Setup output directory
-    output_dir = Path(f"results/think_repair/baseline_{args.model}")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_file = output_dir / "preds.json"
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+    else:
+        output_dir = Path(f"results/think_repair/baseline_{args.model}")
 
-    # Load existing results if resuming
-    predictions = {}
-    if output_file.exists():
-        with open(output_file) as f:
-            predictions = json.load(f)
-        print(f"Loaded {len(predictions)} existing predictions")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save plans separately from patches
+    plans_file = output_dir / "plans.json"
+
+    # Load existing plans if resuming
+    plans = {}
+    if plans_file.exists():
+        with open(plans_file) as f:
+            plans = json.load(f)
+        print(f"Loaded {len(plans)} existing plans")
 
     # Load eval data
     with open(args.eval_data) as f:
@@ -52,8 +64,8 @@ def main():
     print(f"Total instances: {len(instances)}")
     print(f"Model: {args.model}")
     print(f"K-shot: {args.k_shot}")
-    print(f"Max interactions: {args.max_interactions}")
-    print(f"Output: {output_file}")
+    print(f"Knowledge pool: {args.knowledge_pool}")
+    print(f"Output: {plans_file}")
     print()
 
     # Filter instances to process
@@ -64,7 +76,7 @@ def main():
         instance_id = str(instance.get('instance_id') or instance.get('id') or instance['sha_fail'])
 
         # Skip if already processed
-        if instance_id in predictions:
+        if instance_id in plans:
             continue
 
         # Skip until we reach start_from
@@ -82,62 +94,87 @@ def main():
         print("No instances to process!")
         return
 
-    # Run repair on each instance
-    total_cost = sum(p.get('cost', 0) for p in predictions.values())
+    # Generate plans for each instance
+    total_cost = sum(p.get('cost', 0) for p in plans.values())
 
-    for instance in tqdm(to_process, desc="Repairing"):
+    for instance in tqdm(to_process, desc="Generating plans"):
         instance_id = str(instance.get('instance_id') or instance.get('id') or instance['sha_fail'])
 
-        # Prepare inputs
-        issue_description = '\n'.join(
-            f"[{step.get('step_name', 'unknown')}]\n{step.get('log', '')}"
-            for step in instance.get('logs', [])
-        ) if isinstance(instance.get('logs'), list) else instance.get('logs', '')
+        # Get CI analysis
+        try:
+            from baseline_think_repair.ci_analysis_cache import get_ci_analysis_for_instance
+            issue_description = get_ci_analysis_for_instance(instance, model=args.model)
+        except Exception as e:
+            print(f"\nWarning: CI analysis failed for {instance_id}, using raw logs: {e}")
+            # Fallback to raw logs
+            issue_description = '\n'.join(
+                f"[{step.get('step_name', 'unknown')}]\n{step.get('log', '')}"
+                for step in instance.get('logs', [])
+            ) if isinstance(instance.get('logs'), list) else instance.get('logs', '')
 
         changed_files = instance.get('changed_files', [])
-        repo_path = f"/tmp/thinkrepair_repos/{instance['repo_owner']}_{instance['repo_name']}"
+        repo_owner = instance.get('repo_owner', 'unknown')
+        repo_name = instance.get('repo_name', 'unknown')
+        repo_path = f"/tmp/thinkrepair_repos/{repo_owner}_{repo_name}"
 
-        # Run repair
-        result = generate_patch_thinkrepair(
-            issue_description=issue_description,
-            changed_files=changed_files,
-            repo_path=repo_path,
-            model=args.model,
-            diff=instance.get('diff', ''),
-            workflow=instance.get('workflow', ''),
-            validation_commands=instance.get('validation_commands', ''),
-            memory_context={},
-            sha_fail=instance['sha_fail'],
-            instance_id=instance_id,
-            max_interactions=args.max_interactions,
-            k_shot=args.k_shot,
-            knowledge_pool_path=args.knowledge_pool
-        )
+        # Generate plan using ThinkRepair
+        try:
+            result = generate_plan_thinkrepair(
+                issue_description=issue_description,
+                changed_files=changed_files,
+                repo_path=repo_path,
+                model=args.model,
+                diff=instance.get('diff', ''),
+                workflow=instance.get('workflow', ''),
+                sha_fail=instance.get('sha_fail', ''),
+                instance_id=instance_id,
+                k_shot=args.k_shot,
+                knowledge_pool_path=args.knowledge_pool
+            )
+        except Exception as e:
+            print(f"\nError processing {instance_id}: {e}")
+            result = {
+                "plan": "",
+                "reasoning": "",
+                "cost": 0.0,
+                "error": str(e),
+                "examples_used": 0,
+                "model": args.model
+            }
 
-        # Store in format matching miniswe-agent baseline
-        predictions[instance_id] = {
+        # Store plan with metadata
+        plans[instance_id] = {
             "id": instance_id,
-            "sha_fail": instance['sha_fail'],
-            "diff": result["patch"],
+            "sha_fail": instance.get('sha_fail', ''),
+            "repo": f"{repo_owner}/{repo_name}",
+            "plan": result["plan"],
+            "reasoning": result["reasoning"],
             "cost": result["cost"],
-            # Extra info for debugging
-            "applicable": result.get("applicable", False),
             "error": result.get("error", ""),
-            "interactions": result.get("interactions", 0)
+            "examples_used": result.get("examples_used", 0),
+            "model": result.get("model", args.model),
+            # Keep instance info for minisweagent
+            "changed_files": changed_files,
+            "diff": instance.get('diff', ''),
+            "workflow": instance.get('workflow', '')
         }
 
         total_cost += result["cost"]
 
         # Save incrementally
-        with open(output_file, 'w') as f:
-            json.dump(predictions, f, indent=2)
+        with open(plans_file, 'w') as f:
+            json.dump(plans, f, indent=2)
+
+        print(f"\nProcessed {instance_id}: plan={'✓' if result['plan'] else '✗'}, cost=${result['cost']:.4f}, examples={result.get('examples_used', 0)}")
 
     print(f"\nDone! Total cost: ${total_cost:.4f}")
-    print(f"Results saved to: {output_file}")
+    print(f"Plans saved to: {plans_file}")
 
     # Summary
-    successful = sum(1 for p in predictions.values() if p["diff"] and not p.get("error"))
-    print(f"Generated patches: {successful}/{len(predictions)}")
+    successful = sum(1 for p in plans.values() if p["plan"] and not p.get("error"))
+    print(f"Generated plans: {successful}/{len(plans)}")
+    print()
+    print("Next step: Pass these plans to minisweagent for patch generation")
 
 
 if __name__ == "__main__":

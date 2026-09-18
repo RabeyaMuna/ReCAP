@@ -1612,11 +1612,173 @@ def _decode_git_diff(checkout: Path, revision_args: list[str]) -> tuple[str, int
     return patch, binary_proc.returncode
 
 
+def verify_patch_format(patch: str) -> dict[str, Any]:
+    """Verify that a patch has valid format (NON-DESTRUCTIVE).
+    
+    Only checks patch syntax using git apply --numstat.
+    Does NOT modify working tree or checkout any commits.
+    
+    Args:
+        patch: The patch content to verify
+    
+    Returns:
+        dict with 'valid' (bool), 'file_count' (int), and 'error' (str) if invalid
+    """
+    if not patch or not patch.strip():
+        return {
+            "valid": False,
+            "file_count": 0,
+            "error": "Empty patch"
+        }
+    
+    try:
+        # Use git apply --numstat to parse patch format without modifying anything
+        result = subprocess.run(
+            ["git", "apply", "--numstat"],
+            input=patch.encode("utf-8"),
+            capture_output=True,
+            check=False
+        )
+        
+        if result.returncode == 0:
+            # Count files in the patch
+            stats = result.stdout if result.stdout else b""
+            file_count = len([line for line in stats.split(b"\0") if line.strip()])
+            
+            return {
+                "valid": True,
+                "file_count": file_count,
+                "error": None
+            }
+        else:
+            error_msg = result.stderr.decode("utf-8", errors="replace") if result.stderr else "Unknown error"
+            return {
+                "valid": False,
+                "file_count": 0,
+                "error": error_msg
+            }
+    except Exception as exc:
+        return {
+            "valid": False,
+            "file_count": 0,
+            "error": str(exc)
+        }
+
+
+def verify_patch_applies(patch: str, checkout: Path, base_commit: str) -> dict[str, Any]:
+    """Verify that a patch can be applied to the base commit.
+
+    Args:
+        patch: The patch content to verify
+        checkout: Path to git repository
+        base_commit: The commit SHA to apply patch against
+
+    Returns:
+        dict with 'applies' (bool), 'returncode' (int), and 'error' (str) if failed
+    """
+    if not patch or not patch.strip():
+        return {
+            "applies": False,
+            "returncode": -1,
+            "error": "Empty patch"
+        }
+
+    # Create a temporary file for the patch
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.patch', delete=False) as f:
+        f.write(patch)
+        patch_file = f.name
+
+    try:
+        # Ensure we're at the right commit
+        subprocess.run(
+            ["git", "checkout", "-f", base_commit],
+            cwd=checkout,
+            capture_output=True,
+            check=True
+        )
+
+        # Try to apply patch with --check (doesn't actually modify files)
+        result = subprocess.run(
+            ["git", "apply", "--check", patch_file],
+            cwd=checkout,
+            capture_output=True,
+            text=True
+        )
+
+        if result.returncode == 0:
+            return {
+                "applies": True,
+                "returncode": 0,
+                "error": None
+            }
+        else:
+            return {
+                "applies": False,
+                "returncode": result.returncode,
+                "error": result.stderr
+            }
+    except Exception as exc:
+        return {
+            "applies": False,
+            "returncode": -1,
+            "error": str(exc)
+        }
+    finally:
+        # Clean up temp file
+        try:
+            import os
+            os.unlink(patch_file)
+        except Exception:
+            pass
+
+
 def git_diff(checkout: Path, original_commit: str = None) -> str:
-    """Capture all agent changes against the failed commit as a unified diff."""
+    """Capture all agent changes against the failed commit as a unified diff.
+
+    Includes both tracked modifications AND new untracked files.
+    Respects .gitignore and filters out logs/temp files.
+    """
     if not original_commit:
         raise PatchValidationError("The failed commit is required to generate a complete repair patch")
 
+    # Get untracked files (respects .gitignore via --exclude-standard)
+    untracked_result = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=checkout,
+        capture_output=True,
+        text=True,
+        check=False
+    )
+
+    # Filter: only add legitimate code files, skip logs/temp/cache
+    unwanted_extensions = ['.log', '.tmp', '.pyc', '.pyo', '.pyd', '.so', '.o', '.a', '.swp', '~']
+    unwanted_patterns = ['__pycache__', '.pytest_cache', '.mypy_cache', 'node_modules', '.DS_Store']
+
+    untracked = []
+    for f in untracked_result.stdout.splitlines():
+        if not f:
+            continue
+        # Skip unwanted extensions
+        if any(f.endswith(ext) for ext in unwanted_extensions):
+            continue
+        # Skip unwanted patterns
+        if any(pattern in f for pattern in unwanted_patterns):
+            continue
+        untracked.append(f)
+
+    # Add intent-to-add for legitimate new files
+    if untracked:
+        print(f"[git_diff] Adding {len(untracked)} new untracked files to diff")
+        for file in untracked:
+            subprocess.run(
+                ["git", "add", "-N", file],
+                cwd=checkout,
+                capture_output=True,
+                check=False
+            )
+
+    # Now get complete diff (includes both modifications and new files)
     result = subprocess.run(
         ["git", "diff", original_commit],
         cwd=checkout,
@@ -1713,10 +1875,33 @@ def save_patch_and_result(
 
     print(f"[save_patch_and_result] Diff size: {len(diff)} bytes")
     print(f"[save_patch_and_result] Changed files: {len(files)} files")
+
+    # NEW: Verify patch format (non-destructive syntax check)
+    patch_format_check = verify_patch_format(diff) if diff else {"valid": False, "file_count": 0, "error": "No diff"}
+    if patch_format_check.get("valid"):
+        print(f"[save_patch_and_result] ✓ Patch format valid ({patch_format_check.get('file_count', 0)} files)")
+    else:
+        print(f"[save_patch_and_result] ✗ Patch format invalid: {patch_format_check.get('error', 'Unknown')}")
+
     print(f"[save_patch_and_result] Writing to {result_dir / 'patch.diff'}")
 
     result_dir.mkdir(parents=True, exist_ok=True)
     (result_dir / "patch.diff").write_bytes(diff.encode("utf-8"))
+
+    # Determine overall verification status
+    # Patch must: (1) have valid format AND (2) pass any custom verification if provided
+    overall_verification_passed = None
+    if patch_format_check.get("valid"):
+        # Patch format is valid - now check custom verification if available
+        if verification_result is not None:
+            overall_verification_passed = verification_result.get("returncode") == 0
+        else:
+            # No custom verification - patch format valid is enough
+            overall_verification_passed = True
+    else:
+        # Patch format invalid - failed regardless of custom verification
+        overall_verification_passed = False
+
     write_json(
         result_dir / "result.json",
         {
@@ -1728,13 +1913,11 @@ def save_patch_and_result(
             "patch_generated": bool(diff.strip()),
             "patch_bytes": len(diff.encode("utf-8")),
             "changed_files": files,
+            "patch_format_valid": patch_format_check.get("valid"),
+            "patch_format_check": patch_format_check,
             "candidate_validation_commands": candidate_validation_commands(verification),
             "verification": verification_result,
-            "verification_passed": (
-                None
-                if verification_result is None
-                else verification_result.get("returncode") == 0
-            ),
+            "verification_passed": overall_verification_passed,
             "problem_results": problem_results,
         },
     )
@@ -2380,7 +2563,7 @@ def append_prediction_for_issue(
             if not isinstance(existing, list):
                 raise ValueError(f"Expected a JSON list in {predictions_file}")
 
-            # Check if ID already exists - SKIP if present
+            # Check if ID already exists - decide whether to replace
             existing_index = next(
                 (
                     index
@@ -2390,19 +2573,54 @@ def append_prediction_for_issue(
                 None,
             )
             if existing_index is not None:
-                if prediction_has_patch(existing[existing_index]):
+                old_prediction = existing[existing_index]
+
+                # IMPORTANT: Allow replacing if:
+                # 1. Old prediction has no patch (empty/failed attempt)
+                # 2. Old prediction is not verified BUT new one is verified
+                # 3. New prediction has significantly more content (patch is larger)
+                old_has_patch = prediction_has_patch(old_prediction)
+                new_has_patch = prediction_has_patch(prediction)
+                old_verified = old_prediction.get("verification_passed") is True
+                new_verified = prediction.get("verification_passed") is True
+                old_size = old_prediction.get("patch_bytes", 0)
+                new_size = prediction.get("patch_bytes", 0)
+
+                # Skip if old is verified and complete
+                if old_has_patch and old_verified:
                     print(
                         f"  [codex-ci-repair] Skipping {new_id}: "
-                        "a completed prediction already exists"
+                        "a verified prediction already exists"
                     )
                     return False
 
+                # Skip if old is complete and new is not better
+                if old_has_patch and not new_verified and new_size <= old_size:
+                    print(
+                        f"  [codex-ci-repair] Skipping {new_id}: "
+                        "existing prediction is complete and new is not better"
+                    )
+                    return False
+
+                # Replace: old is incomplete OR new is better
                 existing[existing_index] = prediction
                 write_json_atomic(predictions_file, existing)
-                print(
-                    f"  [codex-ci-repair] Completed previously empty prediction "
-                    f"{new_id} in predictions.json"
-                )
+
+                if not old_has_patch:
+                    print(
+                        f"  [codex-ci-repair] Completed previously empty prediction "
+                        f"{new_id} in predictions.json"
+                    )
+                elif new_verified and not old_verified:
+                    print(
+                        f"  [codex-ci-repair] Replaced unverified prediction {new_id} "
+                        f"with verified one in predictions.json"
+                    )
+                else:
+                    print(
+                        f"  [codex-ci-repair] Replaced partial prediction {new_id} "
+                        f"with improved one ({old_size} → {new_size} bytes)"
+                    )
                 return True
 
             # Only append if NEW

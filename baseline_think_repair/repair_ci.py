@@ -1,8 +1,9 @@
 """
-ThinkRepair CI Repair Engine.
+ThinkRepair CI Plan Generator.
 
-Adapted from ThinkRepair (ISSTA 2024) for CI-based program repair.
-Main logic for collection and fixing phases.
+Adapted from ThinkRepair (ISSTA 2024) for generating repair plans.
+Uses knowledge pool with Chain-of-Thought reasoning to generate plans,
+which are then passed to minisweagent for actual patch generation.
 """
 
 import json
@@ -12,28 +13,26 @@ from typing import Dict, List, Optional
 import litellm
 from litellm import completion
 
-from baseline_think_repair import prompts
-
 
 class ThinkRepairCI:
     """
-    ThinkRepair adapted for CI failure repair.
+    ThinkRepair adapted for CI failure repair PLAN generation.
 
     Two-phase approach:
     1. Collection Phase (offline): Build knowledge pool with CoT
-    2. Fixing Phase (online): Few-shot selection + iterative repair
+    2. Fixing Phase (online): Few-shot selection + plan generation
+
+    Output: A detailed plan/reasoning for minisweagent to execute.
     """
 
     def __init__(
         self,
-        model: str = "deepseek-v4-flash",
-        max_interactions: int = 5,
+        model: str = "minimax-m2_5",
         k_shot: int = 2,
         knowledge_pool_path: Optional[str] = None,
-        temperature: float = 1.0
+        temperature: float = 0.7
     ):
         self.model = model
-        self.max_interactions = max_interactions
         self.k_shot = k_shot
         self.temperature = temperature
         self.knowledge_pool = self._load_knowledge_pool(knowledge_pool_path)
@@ -49,14 +48,14 @@ class ThinkRepairCI:
     def _call_llm(self, messages: List[Dict]) -> tuple[str, float]:
         """
         Call LLM and return (response, cost).
-
-        Uses litellm for unified API across models.
         """
         try:
             # Map model names
             if self.model == "deepseek-v4-flash":
                 model_name = "openrouter/deepseek/deepseek-chat"
-            elif self.model == "gpt-5.4-mini":
+            elif self.model in ["minimax-m2_5", "minimax-m2.5"]:
+                model_name = "openrouter/minimax/minimax-m2.5"
+            elif self.model == "gpt-4o-mini":
                 model_name = "gpt-4o-mini"
             else:
                 model_name = self.model
@@ -69,8 +68,7 @@ class ThinkRepairCI:
 
             content = response.choices[0].message.content
 
-            # Calculate cost (rough estimate)
-            # Input: $0.15 / 1M tokens, Output: $0.60 / 1M tokens (deepseek-chat)
+            # Calculate cost
             input_tokens = response.usage.prompt_tokens
             output_tokens = response.usage.completion_tokens
             cost = (input_tokens * 0.15 + output_tokens * 0.60) / 1_000_000
@@ -85,136 +83,135 @@ class ThinkRepairCI:
         """
         Select few-shot examples from knowledge pool.
 
-        Original ThinkRepair uses:
-        - Semantic embeddings (UniXcoder)
-        - Contrastive learning (R-Drop)
-        - K-means clustering
-
-        For simplicity, we use random selection for baseline.
+        For simplicity, uses random selection.
         TODO: Implement semantic similarity matching.
         """
         if not self.knowledge_pool or self.k_shot == 0:
             return []
 
-        # Simple: take first k examples
-        # TODO: Implement cosine similarity on embeddings
         import random
         return random.sample(
             self.knowledge_pool,
             min(self.k_shot, len(self.knowledge_pool))
         )
 
-    def _read_file_contents(self, repo_path: str, files: List[str]) -> Dict[str, str]:
-        """Read contents of changed files."""
-        contents = {}
-        for filepath in files:
-            full_path = Path(repo_path) / filepath
-            if full_path.exists():
-                try:
-                    with open(full_path) as f:
-                        contents[filepath] = f.read()
-                except:
-                    contents[filepath] = f"<Could not read {filepath}>"
-        return contents
-
-    def repair(self, context: Dict) -> Dict:
+    def _build_plan_prompt(
+        self,
+        ci_logs: str,
+        changed_files: List[str],
+        examples: List[Dict]
+    ) -> List[Dict]:
         """
-        Main repair entry point.
+        Build prompt for generating repair plan using few-shot examples.
+        """
+        messages = [
+            {"role": "system", "content": "You are an expert at analyzing CI failures and creating detailed repair plans."}
+        ]
+
+        # Add few-shot examples from knowledge pool
+        for ex in examples:
+            ci_info = ex.get('analysis', ex.get('logs', ''))[:800]
+
+            user_ex = f"""Analyze this CI failure and create a repair plan:
+
+CI Failure Analysis:
+{ci_info}
+
+Changed Files: {ex.get('changed_files', [])}
+
+Provide a detailed plan to fix this."""
+
+            # Show the reasoning from knowledge pool
+            asst_ex = f"""{ex['reasoning']}
+
+Files to modify: {ex.get('changed_files', [])}"""
+
+            messages.append({"role": "user", "content": user_ex})
+            messages.append({"role": "assistant", "content": asst_ex})
+
+        # Add target instance
+        target_msg = f"""Analyze this CI failure and create a detailed repair plan:
+
+## CI Failure Analysis
+{ci_logs[:2000]}
+
+## Changed Files
+{changed_files}
+
+INSTRUCTIONS:
+Provide a detailed plan with:
+
+1. **Root Cause Analysis**: What exactly is causing the CI failure?
+
+2. **Fix Strategy**: What needs to be changed and why?
+
+3. **Implementation Steps**: Specific step-by-step instructions:
+   - Which files to modify
+   - What changes to make (be specific about lines/functions)
+   - What to add/remove/change
+
+4. **Validation**: How to verify the fix works
+
+Be specific and detailed - this plan will be given to an automated tool to implement.
+
+Let's think step by step."""
+
+        messages.append({"role": "user", "content": target_msg})
+
+        return messages
+
+    def generate_plan(self, context: Dict) -> Dict:
+        """
+        Generate repair plan using knowledge pool.
 
         Args:
             context: Dict with keys:
                 - ci_logs: CI failure logs
                 - changed_files: List of changed files
                 - repo_path: Repository path
-                - diff: Git diff
-                - workflow: Workflow file
-                - validation_commands: Validation commands
                 - sha_fail: Failing SHA
                 - instance_id: Instance ID
 
         Returns:
-            Dict with patch, cost, reasoning, etc.
+            Dict with plan, reasoning, cost, etc.
         """
         ci_logs = context["ci_logs"]
         changed_files = context["changed_files"]
-        repo_path = context["repo_path"]
 
-        # Read file contents
-        file_contents = self._read_file_contents(repo_path, changed_files)
-
-        # Select few-shot examples
+        # Select few-shot examples from knowledge pool
         examples = self._select_examples(context)
 
-        # Build initial prompt with few-shot
-        messages = prompts.build_fixing_prompt_fewshot(
+        print(f"[ThinkRepair] Using {len(examples)} examples from knowledge pool")
+
+        # Build prompt
+        messages = self._build_plan_prompt(
             ci_logs=ci_logs,
             changed_files=changed_files,
-            file_contents=file_contents,
             examples=examples
         )
 
-        # Iterative repair with feedback
-        for interaction in range(1, self.max_interactions + 1):
-            print(f"[ThinkRepair] Interaction {interaction}/{self.max_interactions}")
+        # Call LLM to generate plan
+        print(f"[ThinkRepair] Generating repair plan...")
+        response, cost = self._call_llm(messages)
+        self.total_cost += cost
 
-            # Call LLM
-            response, cost = self._call_llm(messages)
-            self.total_cost += cost
-
-            if not response:
-                return {
-                    "patch": "",
-                    "applicable": False,
-                    "cost": self.total_cost,
-                    "error": "LLM call failed",
-                    "reasoning": "",
-                    "interactions": interaction
-                }
-
-            # Extract reasoning and patch
-            reasoning, patch = prompts.extract_reasoning_and_patch(response)
-
-            if not patch:
-                # No patch generated, try one more time with clarification
-                if interaction < self.max_interactions:
-                    feedback_msg = prompts.build_feedback_prompt(
-                        previous_response=response,
-                        error_message="No patch was generated. Please provide a unified diff patch.",
-                        interaction_num=interaction + 1
-                    )
-                    messages.append({"role": "assistant", "content": response})
-                    messages.append({"role": "user", "content": feedback_msg})
-                    continue
-                else:
-                    return {
-                        "patch": "",
-                        "applicable": False,
-                        "cost": self.total_cost,
-                        "error": "No patch generated after all interactions",
-                        "reasoning": reasoning,
-                        "interactions": interaction
-                    }
-
-            # Validate patch (basic check)
-            # In real ThinkRepair, this runs test suite
-            # For baseline, we skip validation and return patch
-
-            # Success!
+        if not response:
             return {
-                "patch": patch,
-                "applicable": True,  # Assume applicable for baseline
+                "plan": "",
+                "reasoning": "",
                 "cost": self.total_cost,
-                "error": "",
-                "reasoning": reasoning,
-                "interactions": interaction
+                "error": "LLM call failed",
+                "examples_used": len(examples)
             }
 
-        # Max interactions reached
+        print(f"[ThinkRepair] ✓ Plan generated (${cost:.4f})")
+
+        # Return plan and metadata
         return {
-            "patch": patch if 'patch' in locals() else "",
-            "applicable": False,
+            "plan": response,  # Full plan text
+            "reasoning": response,  # Same for compatibility
             "cost": self.total_cost,
-            "error": f"Max interactions ({self.max_interactions}) reached",
-            "reasoning": reasoning if 'reasoning' in locals() else "",
-            "interactions": self.max_interactions
+            "error": "",
+            "examples_used": len(examples),
+            "model": self.model
         }

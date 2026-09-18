@@ -2738,6 +2738,21 @@ def process_instance(
                 logger.info(
                     "[CIBench] No separate problems - using standard single problem mode"
                 )
+        else:
+            # Baseline mode: no memory, use logs directly
+            logger.info("[CIBench] Baseline mode: using logs as problem statement")
+            problem_text = instance.get("logs", "")
+            if not isinstance(problem_text, str):
+                problem_text = str(problem_text)
+
+            problems = [{
+                "problem_id": "baseline-1",
+                "is_primary": True,
+                "problem_statement": problem_text,
+                "repair_plan": "",
+                "verification": verification or {},
+                "source": "logs",
+            }]
 
         # ══════════════════════════════════════════════════════════════════
         # ANALYZE AND GROUP PROBLEMS

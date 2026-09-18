@@ -93,6 +93,72 @@ class MetadataList(list):
         self._response_metadata = None
 
 
+def _serialize_usage(obj: Any) -> Any:
+    """Serialize usage/metadata objects to JSON-compatible dicts.
+
+    Handles LangChain/OpenAI usage objects that can't be directly JSON serialized.
+    Safely handles None, dicts, nested objects, and unknown types.
+    """
+    if obj is None:
+        return None
+
+    # If already a dict, recursively serialize nested objects
+    if isinstance(obj, dict):
+        return {k: _serialize_usage(v) for k, v in obj.items()}
+
+    # If it's a basic JSON-serializable type, return as-is
+    if isinstance(obj, (str, int, float, bool)):
+        return obj
+
+    # If it's a list/tuple, recursively serialize elements
+    if isinstance(obj, (list, tuple)):
+        return [_serialize_usage(item) for item in obj]
+
+    # Try to extract common usage/metadata fields
+    result = {}
+    common_fields = [
+        'prompt_tokens', 'completion_tokens', 'total_tokens',
+        'input_tokens', 'output_tokens', 'total_cost',
+        'prompt_cost', 'completion_cost'
+    ]
+
+    for attr in common_fields:
+        if hasattr(obj, attr):
+            val = getattr(obj, attr)
+            # Recursively serialize in case the value is also an object
+            result[attr] = _serialize_usage(val)
+
+    # If we extracted any fields, return that
+    if result:
+        return result
+
+    # Otherwise try __dict__ as fallback (only serialize simple types)
+    if hasattr(obj, '__dict__'):
+        try:
+            serialized = {}
+            for k, v in obj.__dict__.items():
+                # Skip private attributes and non-serializable types
+                if not k.startswith('_'):
+                    try:
+                        # Test if JSON serializable by attempting to serialize
+                        import json
+                        json.dumps(v)
+                        serialized[k] = v
+                    except (TypeError, ValueError):
+                        # If not serializable, try recursive serialization
+                        serialized[k] = _serialize_usage(v)
+            if serialized:
+                return serialized
+        except Exception:
+            pass
+
+    # Last resort: convert to string (safe fallback)
+    try:
+        return str(obj)
+    except Exception:
+        return None
+
+
 def _attach_usage_metadata(result: Any, raw_response: Any) -> Any:
     """Attach usage metadata from raw LLM response to parsed result.
 
@@ -123,19 +189,21 @@ def _attach_usage_metadata(result: Any, raw_response: Any) -> Any:
     if isinstance(result, dict):
         # Don't modify if result already has usage data
         if 'usage' not in result and '_metadata' not in result:
+            # Serialize usage objects to dicts for JSON compatibility
             result['_metadata'] = {
-                'usage': usage,
-                'usage_metadata': usage_metadata,
-                'response_metadata': response_metadata,
+                'usage': _serialize_usage(usage),
+                'usage_metadata': _serialize_usage(usage_metadata),
+                'response_metadata': _serialize_usage(response_metadata),
             }
     # For list results, wrap in MetadataList to preserve metadata
     elif isinstance(result, list):
         # Only wrap if not already a MetadataList
         if not isinstance(result, MetadataList):
             result = MetadataList(result)
-        result._usage = usage
-        result._usage_metadata = usage_metadata
-        result._response_metadata = response_metadata
+        # Serialize metadata objects for JSON compatibility
+        result._usage = _serialize_usage(usage)
+        result._usage_metadata = _serialize_usage(usage_metadata)
+        result._response_metadata = _serialize_usage(response_metadata)
 
     return result
 

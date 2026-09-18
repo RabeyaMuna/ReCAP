@@ -1,8 +1,8 @@
 """
-ThinkRepair wrapper for CI-based repair.
-Matches the interface used by ExpeRepair baseline.
+ThinkRepair wrapper for CI-based repair plan generation.
 
 Based on ThinkRepair (ISSTA 2024): https://github.com/vinci-grape/ThinkRepair
+Generates repair plans using knowledge pool, which are then passed to minisweagent.
 """
 
 from typing import Dict, List, Optional
@@ -13,53 +13,48 @@ from pathlib import Path
 from baseline_think_repair.repair_ci import ThinkRepairCI
 
 
-def generate_patch_thinkrepair(
+def generate_plan_thinkrepair(
     issue_description: str,
     changed_files: List[str],
     repo_path: str,
-    model: str = "deepseek-v4-flash",
+    model: str = "minimax-m2_5",
     diff: str = "",
     workflow: str = "",
-    validation_commands: str = "",
-    memory_context: Optional[Dict] = None,
     sha_fail: str = "",
     instance_id: str = "",
-    max_interactions: int = 5,
     k_shot: int = 2,
     knowledge_pool_path: Optional[str] = None
 ) -> Dict:
     """
-    Generate patch using ThinkRepair approach for CI failures.
+    Generate repair PLAN using ThinkRepair approach for CI failures.
+
+    This plan is then passed to minisweagent for actual patch generation.
 
     Args:
-        issue_description: CI failure logs
+        issue_description: CI failure logs/analysis
         changed_files: List of files changed in failing commit
         repo_path: Path to repository
-        model: LLM model to use (deepseek-v4-flash, gpt-5.4-mini, etc.)
+        model: LLM model to use (minimax-m2_5, deepseek-v4-flash, etc.)
         diff: Git diff of changes
         workflow: CI workflow file content
-        validation_commands: Commands to validate patch
-        memory_context: Memory context (unused for baseline)
         sha_fail: Failing commit SHA
         instance_id: Instance identifier
-        max_interactions: Maximum iterations for repair
-        k_shot: Number of few-shot examples to use
+        k_shot: Number of few-shot examples to use from knowledge pool
         knowledge_pool_path: Path to pre-built knowledge pool JSON
 
     Returns:
         Dict with keys:
-            - patch: Generated unified diff patch
-            - applicable: Whether patch is applicable
+            - plan: Generated repair plan (detailed instructions)
+            - reasoning: Chain-of-thought reasoning
             - cost: API cost in dollars
             - error: Error message if any
-            - reasoning: Chain-of-thought reasoning
-            - interactions: Number of interactions used
+            - examples_used: Number of examples used from knowledge pool
+            - model: Model used
     """
 
     # Initialize ThinkRepair
     repairer = ThinkRepairCI(
         model=model,
-        max_interactions=max_interactions,
         k_shot=k_shot,
         knowledge_pool_path=knowledge_pool_path
     )
@@ -71,21 +66,20 @@ def generate_patch_thinkrepair(
         "repo_path": repo_path,
         "diff": diff,
         "workflow": workflow,
-        "validation_commands": validation_commands,
         "sha_fail": sha_fail,
         "instance_id": instance_id
     }
 
-    # Run repair
+    # Generate plan
     try:
-        result = repairer.repair(context)
+        result = repairer.generate_plan(context)
         return result
     except Exception as e:
         return {
-            "patch": "",
-            "applicable": False,
+            "plan": "",
+            "reasoning": "",
             "cost": 0.0,
             "error": str(e),
-            "reasoning": "",
-            "interactions": 0
+            "examples_used": 0,
+            "model": model
         }
