@@ -29,16 +29,22 @@ echo ""
 echo -e "${YELLOW}[1/9]${NC} Checking Python version..."
 
 # Try to find any available Python 3 (prefer 3.13, 3.12, 3.11, 3.10+)
+# Test each one to make sure it actually works (not just exists)
 PYTHON_CMD=""
 for py_version in python3.13 python3.12 python3.11 python3.10 python3; do
     if command -v "$py_version" &> /dev/null; then
-        PYTHON_CMD="$py_version"
-        break
+        # Test if the Python binary actually works
+        if $py_version --version &> /dev/null; then
+            PYTHON_CMD="$py_version"
+            break
+        else
+            echo -e "${YELLOW}⚠️  $py_version found but not working (incompatible binary), skipping...${NC}"
+        fi
     fi
 done
 
 if [ -z "$PYTHON_CMD" ]; then
-    echo -e "${RED}ERROR: Python 3 not found!${NC}"
+    echo -e "${RED}ERROR: No working Python 3 found!${NC}"
     echo "Please install Python 3.10 or higher."
     exit 1
 fi
@@ -145,7 +151,8 @@ echo ""
 # ============================================================================
 echo -e "${YELLOW}[7.5/9]${NC} Pinning NumPy for Python 3.10+ and SciPy..."
 
-pip install 'numpy>=1.21,<2.0' --quiet
+# Use NumPy 1.26.4 which is compatible with Python 3.10-3.12
+pip install 'numpy==1.26.4' --quiet
 
 NUMPY_VERSION=$(python3 -c "import numpy; print(numpy.__version__)" 2>/dev/null)
 echo -e "${GREEN}✓${NC} NumPy ${NUMPY_VERSION} (compatible with SciPy)"
