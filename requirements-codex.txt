@@ -7,7 +7,7 @@
 # Run: bash INSTALL.sh (handles everything correctly)
 #
 # Or manually:
-# 1. pip install 'torch==2.13.0' 'torchvision==0.28.0' --index-url https://download.pytorch.org/whl/cpu
+# 1. pip install 'torch==2.5.0' 'torchvision==0.20.0' --index-url https://download.pytorch.org/whl/cpu
 # 2. pip install 'numpy==1.26.4'
 # 3. pip install -r requirements-codex.txt
 # 4. cd miniswe-agent && pip install -e . && cd ..
@@ -20,9 +20,9 @@
 # CORE DEPENDENCIES - Compatible versions tested together
 # ============================================================================
 numpy==1.26.4                 # Python 3.10-3.12 + SciPy compatible
-pandas==2.3.3
-scipy==1.14.1
-scikit-learn==1.9.0
+pandas==2.2.3  # Last version for Python 3.10
+scipy==1.13.1  # Last version for Python 3.10
+scikit-learn==1.5.2  # Last version for Python 3.10
 jsonlines==4.0.0
 datasets==4.4.1               # Avoid resolver backtracking across many releases
 
