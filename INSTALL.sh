@@ -28,14 +28,23 @@ echo ""
 # ============================================================================
 echo -e "${YELLOW}[1/9]${NC} Checking Python version..."
 
-if ! command -v python3.13 &> /dev/null; then
-    echo -e "${RED}ERROR: Python 3.13 not found!${NC}"
-    echo "Please install Python 3.13 first."
+# Try to find any available Python 3 (prefer 3.13, 3.12, 3.11, 3.10+)
+PYTHON_CMD=""
+for py_version in python3.13 python3.12 python3.11 python3.10 python3; do
+    if command -v "$py_version" &> /dev/null; then
+        PYTHON_CMD="$py_version"
+        break
+    fi
+done
+
+if [ -z "$PYTHON_CMD" ]; then
+    echo -e "${RED}ERROR: Python 3 not found!${NC}"
+    echo "Please install Python 3.10 or higher."
     exit 1
 fi
 
-PYTHON_VERSION=$(python3.13 --version 2>&1 | awk '{print $2}')
-echo -e "${GREEN}✓${NC} Python ${PYTHON_VERSION} found"
+PYTHON_VERSION=$($PYTHON_CMD --version 2>&1 | awk '{print $2}')
+echo -e "${GREEN}✓${NC} Python ${PYTHON_VERSION} found (using: $PYTHON_CMD)"
 echo ""
 
 # ============================================================================
@@ -84,7 +93,7 @@ echo ""
 # ============================================================================
 echo -e "${YELLOW}[5/9]${NC} Creating ${VENV_NAME} virtual environment..."
 
-python3.13 -m venv "$VENV_NAME"
+$PYTHON_CMD -m venv "$VENV_NAME"
 echo -e "${GREEN}✓${NC} Virtual environment created: ${VENV_NAME}"
 echo ""
 
@@ -132,14 +141,14 @@ fi
 echo ""
 
 # ============================================================================
-# Step 7.5: Pin the Python 3.13 NumPy/SciPy-compatible range
+# Step 7.5: Pin NumPy/SciPy-compatible version
 # ============================================================================
-echo -e "${YELLOW}[7.5/9]${NC} Pinning NumPy for Python 3.13 and SciPy..."
+echo -e "${YELLOW}[7.5/9]${NC} Pinning NumPy for Python 3.10+ and SciPy..."
 
-pip install 'numpy==2.2.6' --quiet
+pip install 'numpy>=1.21,<2.0' --quiet
 
 NUMPY_VERSION=$(python3 -c "import numpy; print(numpy.__version__)" 2>/dev/null)
-echo -e "${GREEN}✓${NC} NumPy ${NUMPY_VERSION} (compatible with Python 3.13 and SciPy)"
+echo -e "${GREEN}✓${NC} NumPy ${NUMPY_VERSION} (compatible with SciPy)"
 
 # Keep the CPU PyTorch family and NumPy versions selected above stable while
 # pip resolves the remaining project and editable-package dependencies.

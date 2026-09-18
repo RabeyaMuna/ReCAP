@@ -840,7 +840,7 @@ set +a
 # Ablation 1: L1 only (failure memory)
 PYTHONPATH=. python scripts/run_miniswe_ci_bench.py \
   --dataset data/eval_set.jsonl \
-  --slice "0:150" \
+  --slice "0:250" \
   --ablation L1 \
   --direction bidirectional \
   --model deepseek-v4-flash \
