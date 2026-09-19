@@ -52,8 +52,18 @@ def run_minisweagent_on_plan(
     instance_id = str(instance.get('instance_id') or instance.get('id'))
 
     # Create temp file with single instance + plan
+    # Format plan as problem statement (put in logs field for baseline mode)
+    plan_as_problem = f"""# ThinkRepair Repair Plan
+
+{plan}
+
+## Repair Instructions
+Follow the plan above to fix the CI failure. This plan was generated using ThinkRepair.
+Implement the fix step-by-step as described in the plan.
+"""
+
     temp_instance = dict(instance)
-    temp_instance['thinkrepair_plan'] = plan  # Add plan to instance
+    temp_instance['logs'] = plan_as_problem  # Put plan in logs field for MiniSWEAgent baseline mode
 
     with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
         f.write(json.dumps(temp_instance) + '\n')
@@ -62,10 +72,10 @@ def run_minisweagent_on_plan(
     try:
         # Run minisweagent on this instance
         cmd = [
-            'mini-swe-agent', 'cibench',
+            sys.executable, '-m', 'minisweagent.run.benchmarks.cibench',
             '--dataset', temp_file,
             '--output', str(output_dir / 'miniswe_temp'),
-            '-m', f'openrouter/{model}',
+            '-m', f'openrouter/minimax/minimax-m2.5',
             '--no-memory-enabled',  # Baseline without memory
         ]
 
@@ -121,9 +131,10 @@ def main():
     parser.add_argument("--k_shot", type=int, default=2, help="Number of few-shot examples")
     parser.add_argument("--knowledge_pool", default="baseline_think_repair/knowledge_pool_minimax.json",
                         help="Path to knowledge pool JSON")
-    parser.add_argument("--output", default="results/thinkrepair_full/", help="Output directory")
+    parser.add_argument("--output", default="results/think_repair/", help="Output directory")
     parser.add_argument("--start_from", type=str, default=None, help="Start from this instance_id (resume)")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of instances")
+    parser.add_argument("--slice", dest="slice_str", help="Slice like '0:150' or '150:408'")
     parser.add_argument("--skip-existing", action="store_true", default=True,
                         help="Skip instances that already have patches (default: True)")
 
@@ -154,7 +165,12 @@ def main():
     with open(args.eval_data) as f:
         instances = [json.loads(line) for line in f if line.strip()]
 
-    if args.limit:
+    # Apply slice if specified
+    if args.slice_str:
+        start, end = map(int, args.slice_str.split(':'))
+        instances = instances[start:end]
+        print(f"Sliced to instances {start}:{end}")
+    elif args.limit:
         instances = instances[:args.limit]
 
     print("="*60)

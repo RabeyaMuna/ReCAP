@@ -840,7 +840,7 @@ set +a
 # Ablation 1: L1 only (failure memory)
 PYTHONPATH=. python scripts/run_miniswe_ci_bench.py \
   --dataset data/eval_set.jsonl \
-  --slice "0:250" \
+  --slice "0:200" \
   --ablation L1 \
   --direction bidirectional \
   --model deepseek-v4-flash \
@@ -849,7 +849,7 @@ PYTHONPATH=. python scripts/run_miniswe_ci_bench.py \
 # Ablation 2: L1+L2 (failure + repo memory)
 PYTHONPATH=. python scripts/run_miniswe_ci_bench.py \
   --dataset data/eval_set.jsonl \
-  --slice "0:150" \
+  --slice "0:200" \
   --ablation L1+L2 \
   --direction bidirectional \
   --model deepseek-v4-flash \
@@ -858,7 +858,7 @@ PYTHONPATH=. python scripts/run_miniswe_ci_bench.py \
 # Ablation 3: L1+L2+L3 (full memory hierarchy)
 PYTHONPATH=. python scripts/run_miniswe_ci_bench.py \
   --dataset data/eval_set.jsonl \
-  --slice "0:150" \
+  --slice "0:200" \
   --ablation L1+L2+L3 \
   --direction bidirectional \
   --model deepseek-v4-flash \

@@ -1271,6 +1271,42 @@ def run_codex(
     # launcher. Do not infer the provider from the shape of an API key.
     env = os.environ.copy()
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # CRITICAL: Keep ALL operations inside the instance checkout directory
+    # Prevents: Permission errors, cache conflicts, external dependencies
+    # All operations confined to: {checkout}/.agent-cache/
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    cache_dir = checkout / '.agent-cache'
+    cache_dir.mkdir(exist_ok=True)
+
+    # Pre-commit: Per-instance cache (no shared ~/.cache/pre-commit/)
+    env['PRE_COMMIT_HOME'] = str(cache_dir / 'pre-commit')
+    env['PRE_COMMIT_ALLOW_NO_CONFIG'] = '1'
+
+    # Python/pip: Keep all caches inside checkout
+    env['PIP_CACHE_DIR'] = str(cache_dir / 'pip')
+    env['PYTHONDONTWRITEBYTECODE'] = '1'  # Don't create __pycache__
+
+    # Temp files: Use checkout directory instead of system /tmp
+    temp_dir = cache_dir / 'tmp'
+    temp_dir.mkdir(exist_ok=True)
+    env['TMPDIR'] = str(temp_dir)
+    env['TEMP'] = str(temp_dir)
+    env['TMP'] = str(temp_dir)
+
+    # Coverage/pytest cache
+    env['COVERAGE_FILE'] = str(cache_dir / '.coverage')
+
+    # npm/node (if used)
+    env['NPM_CONFIG_CACHE'] = str(cache_dir / 'npm')
+
+    print(f"[ISOLATION] All agent operations confined to: {checkout}")
+    print(f"[ISOLATION] Cache directory: {cache_dir}")
+
+    # OPTION: Skip pre-commit entirely (faster if pre-commit not needed)
+    # env['SKIP'] = 'all'
+
     selected_provider = env.get("CODEX_PROVIDER", "").strip().lower()
     if selected_provider == "openai":
         env.pop('OPENROUTER_API_KEY', None)

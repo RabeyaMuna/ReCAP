@@ -84,59 +84,14 @@ Eval Issue → CI Analysis
 
 ## Usage
 
-### Quick Start: One Command (Recommended)
+### Two-Stage Approach (Recommended)
 
-Automatically generates plans with ThinkRepair and patches with MiniSWEAgent:
+Generate all plans first, then run MiniSWEAgent to generate patches.
 
-```bash
-# Run all 408 issues
-python -m minisweagent.run.benchmarks.cibench \
-    --dataset data/eval_set.jsonl \
-    --output results/think_repair/ \
-    -m openrouter/minimax/minimax-m2.5 \
-    --no-memory-enabled
-
-# Run first 150 issues
-python -m minisweagent.run.benchmarks.cibench \
-    --dataset data/eval_set.jsonl \
-    --output results/think_repair/ \
-    -m openrouter/minimax/minimax-m2.5 \
-    --no-memory-enabled \
-    --slice 0:150
-
-# Run remaining issues (151-408)
-python -m minisweagent.run.benchmarks.cibench \
-    --dataset data/eval_set.jsonl \
-    --output results/think_repair/ \
-    -m openrouter/minimax/minimax-m2.5 \
-    --no-memory-enabled \
-    --slice 150:408
-
-# Quick test (first 10 issues)
-python -m minisweagent.run.benchmarks.cibench \
-    --dataset data/eval_set.jsonl \
-    --output results/think_repair/ \
-    -m openrouter/minimax/minimax-m2.5 \
-    --no-memory-enabled \
-    --slice 0:10
-```
-
-**Output**: `results/think_repair/preds.json` (patches for all processed issues)
-
-**What it does**:
-- For each issue: Generate plan with ThinkRepair (using knowledge pool)
-- Pass plan to MiniSWEAgent
-- Generate patch
-- Automatically resumes if interrupted (skips completed issues)
-
-### Alternative: Two-Stage Approach
-
-If you want to generate plans first, then patches separately:
-
-#### Stage 1: Generate Plans Only
+#### Stage 1: Generate ThinkRepair Plans
 
 ```bash
-python baseline_think_repair/run_stage1_plans.py \
+python3 baseline_think_repair/run_stage1_plans.py \
     --eval_data data/eval_set.jsonl \
     --model minimax-m2_5 \
     --k_shot 2 \
@@ -144,16 +99,20 @@ python baseline_think_repair/run_stage1_plans.py \
     --output results/think_repair/
 ```
 
-**Output**: `results/think_repair/plans.json`
+**Outputs**:
+- `results/think_repair/plans.json` - Plans for inspection
+- `results/think_repair/instances_with_plans.jsonl` - Ready for MiniSWEAgent
 
-#### Stage 2: Generate Patches from Plans
+**What it does**:
+- Loads log_details for each issue
+- Selects K=2 similar examples from knowledge pool
+- Generates plan with ThinkRepair (using Chain-of-Thought)
+- Saves both files
+
+#### Stage 2: Generate Patches with MiniSWEAgent
 
 ```bash
-python baseline_think_repair/run_stage2_patches.py \
-    --plans results/think_repair/plans.json \
-    --output results/think_repair/
-
-python -m minisweagent.run.benchmarks.cibench \
+python3 -m minisweagent.run.benchmarks.cibench \
     --dataset results/think_repair/instances_with_plans.jsonl \
     --output results/think_repair/ \
     -m openrouter/minimax/minimax-m2.5 \
@@ -161,6 +120,12 @@ python -m minisweagent.run.benchmarks.cibench \
 ```
 
 **Output**: `results/think_repair/preds.json`
+
+**What it does**:
+- Reads plans from instances_with_plans.jsonl
+- Passes each plan to MiniSWEAgent as problem statement
+- Generates patches
+- Saves to preds.json
 
 ### Setup: Build Knowledge Pool (One-time)
 

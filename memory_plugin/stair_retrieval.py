@@ -1680,10 +1680,12 @@ Result: 1 → 2 → 3
 
 IMPORTANT - Use DIFFERENT matching criteria for each level:
 
-**L1 (File-level problems)** - STRICT matching:
-- Exact or similar error messages
-- Same or compatible files/paths
-- Same validation tool
+**L1 (File-level problems)** - ERROR-PATTERN matching:
+- SAME or SIMILAR error messages (MOST IMPORTANT - focus on this!)
+- Same failure TYPE (e.g., unused_import, type_error, lint_violation)
+- Same validation tool (e.g., ruff, mypy, pylint)
+- NOTE: File paths can differ - an "unused import" fix works across any file
+  Only reject if the error message is completely different
 
 **L2 (Repo-specific strategies)** - MODERATE matching:
 - Same failure type

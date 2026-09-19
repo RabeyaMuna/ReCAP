@@ -112,6 +112,9 @@ class ThinkRepairCI:
         for ex in examples:
             ci_info = ex.get('analysis', ex.get('logs', ''))[:800]
 
+            # Truncate reasoning to prevent context overflow
+            reasoning = ex.get('reasoning', '')[:3000]  # Limit to ~750 tokens per example
+
             user_ex = f"""Analyze this CI failure and create a repair plan:
 
 CI Failure Analysis:
@@ -121,8 +124,8 @@ Changed Files: {ex.get('changed_files', [])}
 
 Provide a detailed plan to fix this."""
 
-            # Show the reasoning from knowledge pool
-            asst_ex = f"""{ex['reasoning']}
+            # Show the reasoning from knowledge pool (TRUNCATED)
+            asst_ex = f"""{reasoning}
 
 Files to modify: {ex.get('changed_files', [])}"""
 

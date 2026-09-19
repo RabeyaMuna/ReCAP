@@ -102,14 +102,27 @@ def main():
                 knowledge_pool_path=args.knowledge_pool
             )
 
+            # Extract repo owner and name
+            repo_owner = instance.get('repo_owner')
+            repo_name = instance.get('repo_name')
+
+            # If not present, parse from 'repo' field (format: "owner/name")
+            if not repo_owner or not repo_name:
+                repo = instance.get('repo', '')
+                if '/' in repo:
+                    repo_owner, repo_name = repo.split('/', 1)
+                else:
+                    repo_owner = repo_owner or ''
+                    repo_name = repo_name or ''
+
             # Save plan with all metadata needed for Stage 2
             plans[instance_id] = {
                 "id": instance_id,
                 "instance_id": instance_id,
                 "sha_fail": instance.get('sha_fail', ''),
-                "repo": f"{instance.get('repo_owner')}/{instance.get('repo_name')}",
-                "repo_owner": instance.get('repo_owner'),
-                "repo_name": instance.get('repo_name'),
+                "repo": f"{repo_owner}/{repo_name}",
+                "repo_owner": repo_owner,
+                "repo_name": repo_name,
 
                 # ThinkRepair outputs
                 "plan": plan_result["plan"],
@@ -144,16 +157,63 @@ def main():
             with open(plans_file, 'w') as f:
                 json.dump(plans, f, indent=2)
 
+    # Also create instances_with_plans.jsonl (ready for cibench)
+    print(f"\nCreating instances file for MiniSWEAgent...")
+    instances_file = output_dir / "instances_with_plans.jsonl"
+    instances_with_plans = []
+
+    for instance_id, plan_data in plans.items():
+        if not plan_data.get('plan'):
+            continue  # Skip instances without plans
+
+        # Format plan as problem statement
+        plan_as_problem = f"""# ThinkRepair Repair Plan
+
+{plan_data['plan']}
+
+## Repair Instructions
+
+Follow the plan above to fix the CI failure. The plan was generated using ThinkRepair
+with {plan_data.get('examples_used', 0)} similar historical examples from the knowledge pool.
+
+Implement the fix step-by-step as described in the plan.
+"""
+
+        instance = {
+            "id": instance_id,
+            "instance_id": instance_id,
+            "sha_fail": plan_data.get('sha_fail', ''),
+            "repo_owner": plan_data.get('repo_owner', ''),
+            "repo_name": plan_data.get('repo_name', ''),
+            "workflow": plan_data.get('workflow', ''),
+            "workflow_path": plan_data.get('workflow_path', ''),
+            "workflow_name": plan_data.get('workflow_name', ''),
+            "logs": plan_as_problem,  # Plan as problem statement
+            "changed_files": plan_data.get('changed_files', []),
+        }
+
+        instances_with_plans.append(instance)
+
+    with open(instances_file, 'w') as f:
+        for inst in instances_with_plans:
+            f.write(json.dumps(inst) + '\n')
+
+    print(f"✓ Created {len(instances_with_plans)} instances ready for MiniSWEAgent")
+
     print(f"\n{'='*60}")
     print("STAGE 1 COMPLETE")
     print(f"{'='*60}")
     print(f"Total cost: ${total_cost:.4f}")
     print(f"Plans generated: {len([p for p in plans.values() if p.get('plan')])} / {len(plans)}")
     print(f"Plans saved to: {plans_file}")
+    print(f"Instances ready: {instances_file}")
     print()
-    print("✓ Next step: Run Stage 2 to generate patches")
-    print("  python baseline_think_repair/run_stage2_patches.py \\")
-    print(f"    --plans {plans_file}")
+    print("✓ Next step: Run MiniSWEAgent directly")
+    print(f"  python3 -m minisweagent.run.benchmarks.cibench \\")
+    print(f"    --dataset {instances_file} \\")
+    print(f"    --output {output_dir} \\")
+    print(f"    -m openrouter/minimax/minimax-m2.5 \\")
+    print(f"    --no-memory-enabled")
     print(f"{'='*60}")
 
 

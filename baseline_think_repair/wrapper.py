@@ -75,11 +75,27 @@ def generate_plan_thinkrepair(
         result = repairer.generate_plan(context)
         return result
     except Exception as e:
+        error_msg = str(e)
+
+        # Check if it's a context length error
+        if "context length" in error_msg.lower() or "maximum context" in error_msg.lower():
+            print(f"  Context too large for instance {instance_id} - SKIPPING")
+            return {
+                "plan": "",
+                "reasoning": "",
+                "cost": 0.0,
+                "error": "CONTEXT_TOO_LARGE",
+                "examples_used": 0,
+                "model": model,
+                "skipped": True
+            }
+
+        # Other errors
         return {
             "plan": "",
             "reasoning": "",
             "cost": 0.0,
-            "error": str(e),
+            "error": error_msg,
             "examples_used": 0,
             "model": model
         }

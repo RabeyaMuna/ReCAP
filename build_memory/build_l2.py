@@ -143,6 +143,21 @@ AUTOMATED_TOOLS = [
     "file_pattern": "*.py",
     "fixes": ["code formatting", "style violations"],
 },
+{
+    "tool": "pre-commit-black-jupyter",
+    "purpose": "Update and run the Black Jupyter notebook pre-commit hook",
+    "install_command": "pre-commit install",
+    "fix_command": (
+        "pre-commit autoupdate && "
+        "pre-commit clean && "
+        "pre-commit run black-jupyter --all-files"
+    ),
+    "file_pattern": "*.ipynb",
+    "fixes": [
+        "Jupyter notebook formatting",
+        "Black pre-commit hook compatibility",
+    ],
+},
 ]
 
 

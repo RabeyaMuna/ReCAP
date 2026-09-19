@@ -172,41 +172,10 @@ IMPORTANT JSON FORMATTING:
       // Command: "Command 'python -m mypy .' exits with code 1"
 
       "key_actions": [
-        // CRITICAL RULES FOR STEPS:
-        // 1. CONFIG CHANGES FIRST, CODE CHANGES SECOND
-        // 2. For AUTOMATED fixes: exact command + "no manual check unless this fails"
-        // 3. For MANUAL fixes: exact file, line, change needed
-        // 4. Include specific config values (versions, constraints, settings)
-        // 5. If any *.py file changes, add Ruff cleanup before final validation:
-        //    "Install Ruff if missing: pip install ruff"
-        //    "Run Ruff autofix: ruff check --fix <changed_python_file_or_dir>"
-        //    "Run Ruff formatter: ruff format <changed_python_file_or_dir>"
-        //
-        // PATTERN A: Config + Code fix (e.g., dependency issues)
-        //   "Step 1: CONFIG - Open <config_file> and modify <section>: set <key>=<value>"
-        //   "Step 2: CODE - Open <source_file> and change <specific_code_location>: <exact_change>"
-        //   "Step 3: Run Ruff cleanup if Python files changed: ruff check --fix <target> && ruff format <target>"
-        //   "Step 4: Verify: <verification_cmd from L1> (should pass)"
-        //
-        // PATTERN B: Automated fix (formatting/linting, many files)
-        //   "Step 1: Install <tool>: <exact install_command from AUTOMATED_TOOLS>"
-        //   "Step 2: Run automated fix: <exact fix_command with file paths> (fixes automatically, no manual check unless this fails)"
-        //   "Step 3: Run Ruff cleanup if Python files changed: ruff check --fix <target> && ruff format <target>"
-        //   "Step 4: Verify: <verification_cmd> (should pass)"
-        //
-        // PATTERN C: Manual fix only (semantic changes, few files)
-        //   "Step 1: Open <actual file from L1> at line <line_number if available>"
-        //   "Step 2: Change <old_code> to <new_code> because <reason from L1 fix_strategy>"
-        //   "Step 3: Run Ruff cleanup if Python files changed: ruff check --fix <target> && ruff format <target>"
-        //   "Step 4: Verify: <verification_cmd from L1> (should pass)"
-        //
-        // EXAMPLES:
-        // Config+Code: "Step 1: CONFIG - Open pyproject.toml [tool.poetry.dependencies] section: add click = '<8.2.0'"
-        //              "Step 2: CODE - Open app.py line 42: change secondary=False to secondary=None"
-        // Automated:   "Step 1: Install: pip install ruff"
-        //              "Step 2: Run: ruff check --fix src/ (fixes automatically, no manual check unless this fails)"
-        // Manual:      "Step 1: Open utils.py line 15"
-        //              "Step 2: Change 'from numpy.typing import DTypeLike' to 'from typing import Any'"
+        // Step order: (1) Config changes (2) Code changes (3) Format/lint check (4) Verification
+        // After manually editing ANY *.py file: check formatting with ruff and fix if errors found
+        // Skip format check if using automated formatter tool (black, autopep8, isort, ruff itself)
+        // Be specific: exact file paths, line numbers when available, config sections, version constraints
       ],
 
       "pitfalls": [
