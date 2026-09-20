@@ -62,7 +62,7 @@ Before attempting any fix:
 3. Check if the specific error signals are still present
 4. If the errors are NOT found:
    - Report "Problem already fixed by previous step"
-   - Commit any staged changes with message "Skip: problem already fixed"
+   - Preserve any previous repair file manifest; do not commit
    - Exit successfully
 5. If errors ARE found: Proceed to fix
 
@@ -89,11 +89,19 @@ fi
 2. Inspect the repository and understand the problem from the supplied context
 3. Make the minimal correct change to fix the issue
 4. Do not modify unrelated files
-5. **Leave your changes in the working tree** (do NOT commit - the harness will capture them)
+5. Write `.codex-repair-files.json` in the repository root with the relative
+   paths of every file intended for the final repair, for example
+   `{"files": ["src/fix.py", "tests/test_fix.py"]}`. Include intended files
+   from earlier problems in the same issue. The harness captures only these
+   files. Do not use `git add` or commit.
 6. OPTIONAL: Run validation ONLY on files you changed (not the whole repo)
 
 **Scope:**
 - Fix this problem only (do not fix unrelated issues)
+- Tool caches, downloaded environments, build outputs, and temporary files are
+  execution artifacts. Do not list them in `.codex-repair-files.json`.
+- Review the manifest before finishing. List all intended edits and exclude
+  generated artifacts, even if they appear in `git status`.
 - Preserve existing behavior unless proven wrong by CI
 - Do not remove tests or weaken checks
 - Do not update dependencies unless required by the fix
@@ -102,7 +110,8 @@ fi
 - If you verify, run validation ONLY on the specific files you changed
 
 **Important:**
-- **DO NOT commit** - leave all changes as uncommitted diff in the working tree
+- **DO NOT commit** - leave intended repair changes in the working tree and
+  list them in `.codex-repair-files.json`
 - The harness will capture your changes and convert them to unified diff format
 - Don't worry if repo-wide validation fails due to other issues
 - Your fix should address the specific problem described below

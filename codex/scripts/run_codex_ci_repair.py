@@ -21,7 +21,7 @@ import tempfile
 import time
 import requests
 import signal
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 # Load environment variables from .env file at project root
@@ -1272,23 +1272,22 @@ def run_codex(
     env = os.environ.copy()
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # CRITICAL: Keep ALL operations inside the instance checkout directory
-    # Prevents: Permission errors, cache conflicts, external dependencies
-    # All operations confined to: {checkout}/.agent-cache/
+    # Keep tool caches beside the checkout. A relative cache path is resolved
+    # against cwd=checkout by the child process and can end up inside the repo.
     # ═══════════════════════════════════════════════════════════════════════════
 
-    cache_dir = checkout / '.agent-cache'
-    cache_dir.mkdir(exist_ok=True)
+    cache_dir = (checkout.parent / '.agent-cache').resolve()
+    cache_dir.mkdir(parents=True, exist_ok=True)
 
     # Pre-commit: Per-instance cache (no shared ~/.cache/pre-commit/)
     env['PRE_COMMIT_HOME'] = str(cache_dir / 'pre-commit')
     env['PRE_COMMIT_ALLOW_NO_CONFIG'] = '1'
 
-    # Python/pip: Keep all caches inside checkout
+    # Python/pip: Keep all caches isolated per instance
     env['PIP_CACHE_DIR'] = str(cache_dir / 'pip')
     env['PYTHONDONTWRITEBYTECODE'] = '1'  # Don't create __pycache__
 
-    # Temp files: Use checkout directory instead of system /tmp
+    # Temp files: Use the per-instance cache instead of system /tmp
     temp_dir = cache_dir / 'tmp'
     temp_dir.mkdir(exist_ok=True)
     env['TMPDIR'] = str(temp_dir)
@@ -1301,7 +1300,7 @@ def run_codex(
     # npm/node (if used)
     env['NPM_CONFIG_CACHE'] = str(cache_dir / 'npm')
 
-    print(f"[ISOLATION] All agent operations confined to: {checkout}")
+    print(f"[ISOLATION] Agent working directory: {checkout}")
     print(f"[ISOLATION] Cache directory: {cache_dir}")
 
     # OPTION: Skip pre-commit entirely (faster if pre-commit not needed)
@@ -1505,6 +1504,8 @@ def run_codex(
 
             # Wait for process to complete
             proc.wait(timeout=10)
+            if proc.stdout is not None:
+                proc.stdout.close()
 
             # Check if watchdog killed the process
             if timed_out:
@@ -1670,7 +1671,7 @@ def verify_patch_format(patch: str) -> dict[str, Any]:
     try:
         # Use git apply --numstat to parse patch format without modifying anything
         result = subprocess.run(
-            ["git", "apply", "--numstat"],
+            ["git", "apply", "--numstat", "-z"],
             input=patch.encode("utf-8"),
             capture_output=True,
             check=False
@@ -1702,16 +1703,7 @@ def verify_patch_format(patch: str) -> dict[str, Any]:
 
 
 def verify_patch_applies(patch: str, checkout: Path, base_commit: str) -> dict[str, Any]:
-    """Verify that a patch can be applied to the base commit.
-
-    Args:
-        patch: The patch content to verify
-        checkout: Path to git repository
-        base_commit: The commit SHA to apply patch against
-
-    Returns:
-        dict with 'applies' (bool), 'returncode' (int), and 'error' (str) if failed
-    """
+    """Check a patch against the base commit without changing the checkout."""
     if not patch or not patch.strip():
         return {
             "applies": False,
@@ -1719,40 +1711,23 @@ def verify_patch_applies(patch: str, checkout: Path, base_commit: str) -> dict[s
             "error": "Empty patch"
         }
 
-    # Create a temporary file for the patch
-    import tempfile
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.patch', delete=False) as f:
-        f.write(patch)
-        patch_file = f.name
-
     try:
-        # Ensure we're at the right commit
-        subprocess.run(
-            ["git", "checkout", "-f", base_commit],
-            cwd=checkout,
-            capture_output=True,
-            check=True
-        )
-
-        # Try to apply patch with --check (doesn't actually modify files)
-        result = subprocess.run(
-            ["git", "apply", "--check", patch_file],
-            cwd=checkout,
-            capture_output=True,
-            text=True
-        )
-
-        if result.returncode == 0:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env = os.environ.copy()
+            env["GIT_INDEX_FILE"] = str(Path(temp_dir) / "index")
+            subprocess.run(
+                ["git", "read-tree", base_commit],
+                cwd=checkout, env=env, capture_output=True, check=True,
+            )
+            result = subprocess.run(
+                ["git", "apply", "--cached", "--check"],
+                input=patch.encode("utf-8"), cwd=checkout, env=env,
+                capture_output=True, check=False,
+            )
             return {
-                "applies": True,
-                "returncode": 0,
-                "error": None
-            }
-        else:
-            return {
-                "applies": False,
+                "applies": result.returncode == 0,
                 "returncode": result.returncode,
-                "error": result.stderr
+                "error": result.stderr.decode("utf-8", errors="replace") or None,
             }
     except Exception as exc:
         return {
@@ -1760,69 +1735,86 @@ def verify_patch_applies(patch: str, checkout: Path, base_commit: str) -> dict[s
             "returncode": -1,
             "error": str(exc)
         }
-    finally:
-        # Clean up temp file
-        try:
-            import os
-            os.unlink(patch_file)
-        except Exception:
-            pass
 
 
 def git_diff(checkout: Path, original_commit: str = None) -> str:
-    """Capture all agent changes against the failed commit as a unified diff.
-
-    Includes both tracked modifications AND new untracked files.
-    Respects .gitignore and filters out logs/temp files.
-    """
+    """Capture only the repair files selected by the agent's manifest."""
     if not original_commit:
         raise PatchValidationError("The failed commit is required to generate a complete repair patch")
 
-    # Get untracked files (respects .gitignore via --exclude-standard)
-    untracked_result = subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard"],
-        cwd=checkout,
-        capture_output=True,
-        text=True,
-        check=False
-    )
+    manifest_path = checkout / ".codex-repair-files.json"
+    if not manifest_path.exists():
+        raise PatchValidationError(
+            "Agent did not write .codex-repair-files.json with intended repair files"
+        )
+    if manifest_path.stat().st_size > 65536:
+        raise PatchValidationError("Repair file manifest exceeds 64 KiB")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise PatchValidationError(f"Invalid repair file manifest: {exc}") from exc
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("files"), list):
+        raise PatchValidationError("Repair file manifest must have a 'files' list")
 
-    # Filter: only add legitimate code files, skip logs/temp/cache
-    unwanted_extensions = ['.log', '.tmp', '.pyc', '.pyo', '.pyd', '.so', '.o', '.a', '.swp', '~']
-    unwanted_patterns = ['__pycache__', '.pytest_cache', '.mypy_cache', 'node_modules', '.DS_Store']
+    generated_dirs = {
+        ".agent-cache", ".mypy_cache", ".nox", ".pytest_cache",
+        ".ruff_cache", ".tox", ".venv", "__pycache__",
+        "node_modules", "venv",
+    }
+    unwanted_files = {".coverage", ".DS_Store"}
+    selected: list[str] = []
+    for value in manifest["files"]:
+        if not isinstance(value, str) or not value:
+            raise PatchValidationError("Repair file paths must be nonempty strings")
+        path = PurePosixPath(value)
+        # Reject any path containing hidden files/directories (starting with ".")
+        # Exception: Allow common config files at repo root
+        allowed_hidden = {".github", ".gitlab", ".circleci", ".travis.yml", ".gitignore", ".gitattributes"}
+        has_disallowed_hidden = any(
+            part.startswith(".") and part not in allowed_hidden
+            for part in path.parts
+        )
+        if (
+            path.is_absolute()
+            or path.as_posix() != value
+            or "\0" in value
+            or "\\" in value
+            or any(part in {".", ".."} for part in value.split("/"))
+            or any(part in generated_dirs | {".git"} for part in path.parts)
+            or path.name in unwanted_files | {manifest_path.name}
+            or has_disallowed_hidden
+        ):
+            raise PatchValidationError(f"Invalid or generated repair path: {value}")
+        if (checkout / value).is_dir():
+            raise PatchValidationError(f"List individual repair files, not a directory: {value}")
+        if value not in selected:
+            selected.append(value)
 
-    untracked = []
-    for f in untracked_result.stdout.splitlines():
-        if not f:
-            continue
-        # Skip unwanted extensions
-        if any(f.endswith(ext) for ext in unwanted_extensions):
-            continue
-        # Skip unwanted patterns
-        if any(pattern in f for pattern in unwanted_patterns):
-            continue
-        untracked.append(f)
+    if not selected:
+        return ""
 
-    # Add intent-to-add for legitimate new files
-    if untracked:
-        print(f"[git_diff] Adding {len(untracked)} new untracked files to diff")
-        for file in untracked:
+    # Git does not diff untracked files. Mark only agent-selected new files as
+    # intent-to-add; this does not stage their contents or select other output.
+    for path in selected:
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", path],
+            cwd=checkout, capture_output=True, check=False,
+        ).returncode == 0
+        if not tracked:
+            if not ((checkout / path).is_file() or (checkout / path).is_symlink()):
+                raise PatchValidationError(f"Selected repair file does not exist: {path}")
             subprocess.run(
-                ["git", "add", "-N", file],
-                cwd=checkout,
-                capture_output=True,
-                check=False
+                ["git", "add", "-N", "--", path],
+                cwd=checkout, capture_output=True, check=True,
             )
 
-    # Now get complete diff (includes both modifications and new files)
-    result = subprocess.run(
-        ["git", "diff", original_commit],
-        cwd=checkout,
-        capture_output=True,
-        text=True,
-        check=True
+    diff, returncode = _decode_git_diff(
+        checkout,
+        [original_commit, "--", *[f":(literal){path}" for path in selected]],
     )
-    return result.stdout
+    if returncode != 0:
+        raise PatchValidationError("git diff failed while capturing the repair patch")
+    return diff
 
 
 def changed_files(checkout: Path, original_commit: str = None) -> list[str]:
@@ -1912,12 +1904,19 @@ def save_patch_and_result(
     print(f"[save_patch_and_result] Diff size: {len(diff)} bytes")
     print(f"[save_patch_and_result] Changed files: {len(files)} files")
 
-    # NEW: Verify patch format (non-destructive syntax check)
+    # Syntax alone cannot establish that the patch applies to the benchmark SHA.
     patch_format_check = verify_patch_format(diff) if diff else {"valid": False, "file_count": 0, "error": "No diff"}
+    patch_apply_check = (
+        verify_patch_applies(diff, checkout, original_sha or issue["sha_fail"])
+        if patch_format_check["valid"]
+        else {"applies": False, "returncode": -1, "error": patch_format_check["error"]}
+    )
     if patch_format_check.get("valid"):
         print(f"[save_patch_and_result] ✓ Patch format valid ({patch_format_check.get('file_count', 0)} files)")
     else:
         print(f"[save_patch_and_result] ✗ Patch format invalid: {patch_format_check.get('error', 'Unknown')}")
+    if not patch_apply_check["applies"]:
+        print(f"[save_patch_and_result] ✗ Patch does not apply: {patch_apply_check['error']}")
 
     print(f"[save_patch_and_result] Writing to {result_dir / 'patch.diff'}")
 
@@ -1927,7 +1926,7 @@ def save_patch_and_result(
     # Determine overall verification status
     # Patch must: (1) have valid format AND (2) pass any custom verification if provided
     overall_verification_passed = None
-    if patch_format_check.get("valid"):
+    if patch_format_check.get("valid") and patch_apply_check["applies"]:
         # Patch format is valid - now check custom verification if available
         if verification_result is not None:
             overall_verification_passed = verification_result.get("returncode") == 0
@@ -1951,6 +1950,7 @@ def save_patch_and_result(
             "changed_files": files,
             "patch_format_valid": patch_format_check.get("valid"),
             "patch_format_check": patch_format_check,
+            "patch_apply_check": patch_apply_check,
             "candidate_validation_commands": candidate_validation_commands(verification),
             "verification": verification_result,
             "verification_passed": overall_verification_passed,
@@ -2249,6 +2249,7 @@ def _run_issue(
         and all(result.get("returncode") == 0 for result in problem_results)
         and (result_dir / "patch.diff").exists()
         and (result_dir / "patch.diff").read_text(encoding="utf-8").strip()
+        and load_json(result_dir / "result.json", {}).get("verification_passed")
     )
     if completed and getattr(args, "incremental_predictions", True):
         append_prediction_for_issue(
@@ -2450,6 +2451,8 @@ def prediction_has_patch(prediction: Any) -> bool:
     if not isinstance(prediction, dict):
         return False
     if prediction.get("patch_generated") is False:
+        return False
+    if prediction.get("verification_passed") is False:
         return False
     return bool(str(prediction.get("diff") or "").strip())
 
