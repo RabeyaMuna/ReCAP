@@ -23,7 +23,7 @@ AUTOMATED_TOOLS = [
         "fix_command": "ruff check --fix {{file_or_dir}}",
         "format_command": "ruff format {{file_or_dir}}",
         "file_pattern": "*.py",
-        "fixes": ["linting errors", "import sorting", "code formatting"],
+        "fixes": ["linting errors", "import sorting, order, grouping", "code formatting"],
     },
     {
         "tool": "black",
@@ -32,14 +32,6 @@ AUTOMATED_TOOLS = [
         "fix_command": "black {{file_or_dir}}",
         "file_pattern": "*.py",
         "fixes": ["code formatting", "line length", "indentation"],
-    },
-    {
-        "tool": "isort",
-        "purpose": "Python import statement sorter",
-        "install_command": "pip install isort",
-        "fix_command": "isort {{file_or_dir}}",
-        "file_pattern": "*.py",
-        "fixes": ["import order", "import grouping"],
     },
     {
         "tool": "docstrfmt",

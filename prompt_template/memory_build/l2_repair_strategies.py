@@ -172,15 +172,119 @@ IMPORTANT JSON FORMATTING:
       // Command: "Command 'python -m mypy .' exits with code 1"
 
       "key_actions": [
-        // Step order: (1) Config changes (2) Code changes (3) Format/lint check (4) Verification
-        // After manually editing ANY *.py file: check formatting with ruff and fix if errors found
-        // Skip format check if using automated formatter tool (black, autopep8, isort, ruff itself)
+        // USE COMPREHENSIVE TOOLS (not narrow single-purpose tools):
+        // PREFER: ruff (fixes imports+linting+formatting), pre-commit (runs all)
+        // AVOID: isort only, black only, flake8 only (too narrow)
+        //
+        // PHASE 1: INITIAL FIX
+        // Step order: (1) Config changes (2) Code changes (3) Initial verification
+        //
+        // PHASE 2: COMPREHENSIVE FORMATTING/LINTING FIX (MANDATORY)
+        // After applying the initial fix, ALWAYS run comprehensive tools:
+        //
+        // FOR PYTHON PROJECTS (use comprehensive tools):
+        //   Step 1: Run comprehensive formatter/linter:
+        //     BEST: ruff check --fix . && ruff format .
+        //     (This fixes: imports, linting, formatting ALL AT ONCE)
+        //
+        //   Step 2: Verify all checks pass:
+        //     ruff check . (exit 0)
+        //     black --check . (exit 0, if project uses black)
+        //     isort --check . (exit 0, if project uses isort)
+        //
+        //   Step 3: If project has pre-commit:
+        //     pre-commit run --all-files
+        //     (Runs ALL configured formatters/linters)
+        //
+        // WHY COMPREHENSIVE TOOLS:
+        //   - Problem: "isort failed" but workflow also checks black, flake8
+        //   - Narrow fix: isort file.py → only fixes imports
+        //   - Broad fix: ruff check --fix . → fixes imports + linting + more
+        //   - Result: All checks pass, not just the L1 problem
+        //
+        // PHASE 3: POST-FIX VERIFICATION & ITERATION
+        // After comprehensive fix, run validation_cmd and CHECK the failure type:
+        //
+        // IF STATIC ANALYSIS STILL FAILS:
+        //   Step 1: Check what else failed (might be different error now)
+        //   Step 2: Apply targeted fix
+        //   Step 3: Re-run comprehensive tools again
+        //   Step 4: Iterate: fix → comprehensive check → verify
+        //
+        // IF TEST FAILURE:
+        //   Step 1: Run tests with verbose output: pytest -v or pytest -vv
+        //   Step 2: Analyze specific test failure:
+        //     - ImportError → Fix import paths, check __init__.py files
+        //     - AttributeError/KeyError in tests → Fix test fixtures/mocks
+        //     - AssertionError → Fix test expectations or actual code
+        //     - Async RuntimeWarning → Add @pytest.mark.asyncio, use AsyncMock
+        //   Step 3: Apply targeted fix for that specific test error
+        //   Step 4: Re-run tests
+        //   Step 5: Iterate: fix test → verify → fix next test until all pass
+        //
+        // IF DEPENDENCY/IMPORT FAILURE:
+        //   Step 1: Check requirements.txt, pyproject.toml for version constraints
+        //   Step 2: Resolve version conflicts (use compatible version ranges)
+        //   Step 3: Check for missing __init__.py in new directories
+        //   Step 4: Re-run validation_cmd
+        //
+        // IF CONFIG FAILURE:
+        //   Step 1: Validate config file syntax (yamllint, toml-sort --check)
+        //   Step 2: Check for deprecated config options
+        //   Step 3: Fix config issues
+        //   Step 4: Re-run validation_cmd
+        //
+        // PHASE 3: FINAL VERIFICATION
+        // - Run validation_cmd one final time
+        // - Ensure exit code is 0
+        // - Include ALL modified files in final patch (code + auto-fixed formatting)
+        //
+        // ITERATION LIMIT: Max 3 iterations per failure type
+        // If still failing after 3 iterations, document the remaining issue
+        //
         // Be specific: exact file paths, line numbers when available, config sections, version constraints
       ],
 
       "pitfalls": [
         "<Common mistakes specific to THIS error type>",
         "<Tool-specific warnings if using automation>"
+      ],
+
+      // MANDATORY POST-FIX VERIFICATION (applies to ALL strategies)
+      "post_fix_verification": [
+        "AFTER applying ANY fix (code, config, docs, etc.), ALWAYS verify formatting/linting:",
+        "",
+        "STEP 1: Run comprehensive formatting/linting check:",
+        "  Option A (if ruff available): ruff check . && ruff format --check .",
+        "  Option B (if pre-commit): pre-commit run --all-files"
+        "",
+        "STEP 2: If formatting/linting issues found:",
+        "  Auto-fix immediately:",
+        "    - ruff check --fix . && ruff format .",
+        "    - OR: pre-commit run --all-files (then commit changes)"
+        "",
+        "STEP 3: Re-run check to confirm all issues fixed:"
+        
+        "STEP 4: Include ALL auto-fixed files in final patch:",
+        "  Original fix + formatting fixes = complete patch",
+        "",
+        "WHY THIS IS CRITICAL:",
+        "  - Even if you fixed the problem, formatting/linting might still fail",
+        "  - CI workflows often check formatting AFTER running your fix",
+        "  - Better to catch and fix formatting NOW than fail CI later",
+        "",
+        "APPLIES TO:",
+        "  - Code fixes (Python, JavaScript, etc.)",
+        "  - Config changes (might affect formatting rules)",
+        "  - Documentation changes (Python docstrings need formatting)",
+        "  - Test changes (test files must pass formatting too)"
+      ],
+
+      "critical_warnings": [
+        "After ANY file edit: MANDATORY post-fix formatting/linting verification",
+        "Use comprehensive tools (ruff, pre-commit) not narrow tools (isort only)",
+        "Auto-fix formatting issues immediately, don't leave for CI to catch",
+        "Include ALL auto-fixed files in the final patch"
       ],
 
       "example_phrasing": "<Natural language using actual file names and error types from YOUR L1>"

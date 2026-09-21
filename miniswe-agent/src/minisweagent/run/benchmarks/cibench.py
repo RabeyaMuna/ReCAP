@@ -1875,6 +1875,22 @@ REPAIR APPROACH:
 Validation Command:
 {verification_cmd or "Determine from the CI workflow and run the relevant check."}
 
+MANDATORY POST-FIX VERIFICATION:
+After implementing your fix, verify it doesn't introduce new errors:
+
+1. Run the validation command on your changed files:
+   {f"- Use: {verification_cmd}" if verification_cmd else "- Check .github/workflows/*.yml or .pre-commit-config.yaml for verification steps"}
+   - If verification command cannot run skip the verification.
+
+2. If verification reveals NEW errors (formatting, linting, imports, etc.):
+   - Use auto-fix tools with --fix flags (ruff check --fix, black, isort, etc.)
+   - Re-run verification until it passes
+   - Include all auto-fixed files in your final patch
+
+3. NEVER skip a repair due to formatting/linting issues - fix them automatically or manually before submitting.
+
+Remember: The goal is to fix the original problem WITHOUT introducing new issues.
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CRITICAL: ISOLATED ENVIRONMENT - USE REPO-SPECIFIC VIRTUAL ENVIRONMENT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

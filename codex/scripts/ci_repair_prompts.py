@@ -115,20 +115,37 @@ CRITICAL: Validation requirements differ based on problem type.
      exit 0
    ```
 
-   **If verification cannot run - check signals and description:**
+   **If verification cannot run - analyze problem signals:**
    ```bash
    else
-     # Cannot verify - check if signals are specific enough
-     # Strong signals: 3+ specific errors with line numbers/details
-     # Weak signals: vague descriptions, generic messages
+     # Cannot verify locally - analyze the problem description and signals
+     echo "HIDDEN PROBLEM - Cannot verify locally, analyzing signals..."
 
-     if <signals_are_specific_and_detailed>; then
-       echo "PROCEED: Cannot verify but signals are specific"
-       # Continue to fix
-     else
-       echo "SKIP: Cannot verify and signals too vague"
+     # Check if problem description + signals indicate a real issue:
+     # - Are there specific error messages, line numbers, or file names?
+     # - Does the problem description reference concrete code patterns?
+     # - Are multiple failure signals consistent with each other?
+
+     # CONSERVATIVE APPROACH: Only skip if you are CERTAIN there's no problem
+     # When in doubt, PROCEED and attempt the fix
+
+     # Example reasons to SKIP (rare):
+     # - Problem explicitly states "already fixed in newer commit"
+     # - Signals are completely contradictory or impossible
+     # - File paths in signals don't exist and can't be found
+
+     # Example reasons to PROCEED (default):
+     # - Specific error messages or line numbers mentioned
+     # - Problem description matches actual code patterns
+     # - Signals are vague but problem is plausible
+
+     if <you_are_CERTAIN_no_problem_exists>; then
+       echo "SKIP: Certain that hidden problem does not exist"
        echo '{"files": []}' > .codex-repair-files.json
        exit 0
+     else
+       echo "PROCEED: Problem signals suggest issue may exist (attempting fix)"
+       # Continue to fix - better to attempt than skip prematurely
      fi
    fi
    ```
@@ -174,38 +191,52 @@ fi
 
 **Decision Summary:**
 - PRIMARY (ci_failure): PROCEED immediately, no validation
-- HIDDEN + verification confirms: PROCEED
+- HIDDEN + verification confirms problem: PROCEED
 - HIDDEN + verification shows no problem: SKIP
-- HIDDEN + cannot verify + strong signals: PROCEED
-- HIDDEN + cannot verify + weak signals: SKIP
+- HIDDEN + cannot verify: PROCEED (unless CERTAIN problem doesn't exist)
+- **Default for HIDDEN problems: PROCEED with fix attempt (conservative approach)**
 
 **For automated tool failures (formatters, linters, type checkers):**
 - Prefer running the tool with auto-fix flags
 - Let the tool fix all affected files at once
 - Only manually edit if the tool cannot auto-fix
 
-**After completing ANY fix - VERIFY formatting/linting (CRITICAL):**
-Before finalizing your repair:
-1. Check if your changed files have formatting or linting issues
-2. If issues exist, use available auto-fix tools to resolve them
-3. Verify issues are resolved by checking again
-4. The repair strategy from memory may suggest specific tools - use those
-5. If no specific tool suggested, detect and use what's available in the repo
+**After completing ANY fix - VERIFY your changes (MANDATORY):**
 
-This prevents formatting/linting-only failures from causing patch rejection.
+After implementing your fix, you MUST verify it works:
+
+1. **Run the verification command:**
+   - Use `verification_cmd` if provided, otherwise discover it from CI config files
+   - Run it on your changed files to check if your fix works
+
+2. **If verification FAILS or reveals NEW errors:**
+   - Fix those errors as well (use auto-fix tools when available: isort, black, ruff --fix, etc.)
+   - Re-run verification with the same command
+   - Repeat until verification passes
+
+3. **Keep iterating:**
+   - Continue fixing and verifying until the verification command succeeds
+   - Include all fixed files in your final patch
+   - Never give up after the first verification failure
 
 **General workflow:**
 1. **CHECK if problem exists** (see STEP 0 above - REQUIRED)
 2. Inspect the repository and understand the problem from the supplied context
 3. Make the minimal correct change to fix the issue
-4. **VERIFY AND FIX**: Check formatting/linting on changed files, fix if needed
-5. Do not modify unrelated files
-6. Write `.codex-repair-files.json` in the repository root with the relative
+4. **After making changes, ensure formatting and linting are correct:**
+   - Check that your changed files pass formatting checks
+   - Check that your changed files pass linting checks
+   - If any checks fail, fix them before proceeding
+5. **VERIFY your fix** (see "After completing ANY fix" above):
+   - Run verification command on changed files
+   - If fails, fix issues and verify again
+   - Repeat until passes
+6. Do not modify unrelated files
+7. Write `.codex-repair-files.json` in the repository root with the relative
    paths of every file intended for the final repair, for example
    `{"files": ["src/fix.py", "tests/test_fix.py"]}`. Include intended files
    from earlier problems in the same issue. The harness captures only these
    files. Do not use `git add` or commit.
-7. OPTIONAL: Run validation ONLY on files you changed (not the whole repo)
 
 **Scope:**
 - Fix this problem only (do not fix unrelated issues)

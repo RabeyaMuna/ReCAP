@@ -788,7 +788,7 @@ python3 scripts/decompose_commits.py \
 python3 scripts/decompose_bidirectional.py \
   --batch \
   --dataset data/memory_set.jsonl \
-  --model gpt-4o-mini \
+  --model deepseek-v4-flash \
   --output-dir data/bidirect_trs
 
 # Specific issues
