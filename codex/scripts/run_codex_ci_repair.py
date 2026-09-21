@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -1737,6 +1738,22 @@ def verify_patch_applies(patch: str, checkout: Path, base_commit: str) -> dict[s
         }
 
 
+# Shell redirection artifacts that should not be included in patches
+SHELL_ARTIFACT_PATTERNS = [
+    r'^[=>][0-9]+$',      # Shell redirections: =0.54.0, >12345
+    r'^[0-9]+$',          # Plain numbers: 0, 1, 2
+    r'\.tmp$',            # Temp files
+    r'\.log$',            # Log files
+    r'^output',           # output files
+]
+
+
+def is_shell_artifact(filename: str) -> bool:
+    """Check if filename looks like a shell redirection artifact."""
+    basename = os.path.basename(filename)
+    return any(re.match(pattern, basename) for pattern in SHELL_ARTIFACT_PATTERNS)
+
+
 def git_diff(checkout: Path, original_commit: str = None) -> str:
     """Capture only the repair files selected by the agent's manifest."""
     if not original_commit:
@@ -1766,6 +1783,12 @@ def git_diff(checkout: Path, original_commit: str = None) -> str:
     for value in manifest["files"]:
         if not isinstance(value, str) or not value:
             raise PatchValidationError("Repair file paths must be nonempty strings")
+
+        # Skip shell artifacts dynamically
+        if is_shell_artifact(value):
+            print(f"[git_diff] Skipping shell artifact: {value}")
+            continue
+
         path = PurePosixPath(value)
         # Reject any path containing hidden files/directories (starting with ".")
         # Exception: Allow common config files at repo root
@@ -1792,6 +1815,8 @@ def git_diff(checkout: Path, original_commit: str = None) -> str:
 
     if not selected:
         return ""
+
+    print(f"[git_diff] Capturing {len(selected)} agent-selected repair files")
 
     # Git does not diff untracked files. Mark only agent-selected new files as
     # intent-to-add; this does not stage their contents or select other output.

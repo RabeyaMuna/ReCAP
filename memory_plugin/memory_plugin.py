@@ -130,6 +130,45 @@ class MemoryPlugin:
             query=query_metadata
         )
 
+    def decompose_only(
+        self,
+        ci_failure: Dict[str, Any],
+        verification: Optional[Dict[str, Any]] = None,
+        issue_metadata: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Decompose CI failure into problems without memory retrieval.
+        Used for baseline mode where only decomposition is needed.
+
+        Args:
+            ci_failure: Complete CI failure analysis dict
+            verification: Workflow verification dict
+            issue_metadata: Metadata (workflow_path, workflow_name, repo, sha_fail)
+
+        Returns:
+            List of decomposed problems (without memory data)
+        """
+        issue_metadata = issue_metadata or {}
+        sha_fail = issue_metadata.get("sha_fail", "")
+
+        # Check cache first
+        cache = get_global_cache()
+        if sha_fail and cache.has(sha_fail):
+            decomposed_problems = cache.get_problems(sha_fail)
+            print(f"[Memory] Using cached decomposition for {sha_fail[:12]}")
+            return decomposed_problems
+
+        # Generate decomposition and save to cache
+        print(f"[Memory] Generating decomposition for {sha_fail[:12] if sha_fail else 'unknown'}")
+        return self._decompose_and_save_to_cache(
+            ci_failure=ci_failure,
+            verification=verification,
+            workflow_path=issue_metadata.get("workflow_path", ""),
+            workflow_name=issue_metadata.get("workflow_name", ""),
+            repo=issue_metadata.get("repo", ""),
+            sha_fail=sha_fail
+        )
+
     def _decompose_and_save_to_cache(
         self,
         ci_failure: Dict[str, Any],

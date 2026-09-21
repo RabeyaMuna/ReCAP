@@ -44,8 +44,12 @@ def optimize_memories(
     # Step 3: If L1 OR L2 exist, skip L3 (L1+L2 provide complete solution)
     # L1 = what changed (concrete), L2 = how to solve (approach)
     if len(l1_deduped) > 0 or len(l2_deduped) > 0:
-        print(f"[Optimizer] ✅ L1={len(l1_deduped)} (concrete) or L2={len(l2_deduped)} (approach) exist, skipping L3")
-        return l1_deduped, l2_deduped, []
+        print(f"[Optimizer] L1={len(l1_deduped)} (concrete) or L2={len(l2_deduped)} (approach) exist, skipping L3")
+        if len(l3_deduped) > 0:
+            print(f"[Optimizer] EXCLUDED {len(l3_deduped)} L3 matches (prioritizing L1/L2)")
+        # Ensure L3 is actually empty
+        l3_result = []
+        return l1_deduped, l2_deduped, l3_result
 
     # Step 4: L1 and L2 are BOTH empty - use L3 as last resort
     if len(l3_deduped) > 0:
