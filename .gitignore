@@ -234,3 +234,8 @@ codex/.codex-config/config.toml
 tests/
 exception/
 eval/
+
+# Local evaluation-statistics helpers
+/analysis/generate_evaluation_stats.py
+/analysis/mcnemar_test.py
+/analysis/EVALUATION_STATS.md

@@ -10,8 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE.md" }
 authors = [
-  { name = "Kilian Lieret", email = "kilian.lieret@posteo.de" },
-  { name = "Carlos E. Jimenez", email = "carlosej@princeton.edu" },
+  { name = "Anonymous" },
 ]
 dependencies = [
   "pyyaml",

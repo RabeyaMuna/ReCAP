@@ -110,7 +110,7 @@ Follow the login flow, then exit the interactive session.
 From the project root:
 
 ```bash
-cd /Users/rabeyakhatunmuna/Documents/mini-swe-agent-ci-based
+cd /path/to/project
 codex --version
 codex exec --help
 ```
@@ -145,7 +145,7 @@ Use the root Python environment with the shared utilities and memory plugin
 dependencies installed.
 
 ```bash
-cd /Users/rabeyakhatunmuna/Documents/mini-swe-agent-ci-based
+cd /path/to/project
 
 python3 -m venv .venv
 source .venv/bin/activate

@@ -9,7 +9,7 @@
 # Or manually:
 # 1. pip install 'torch==2.5.0' 'torchvision==0.20.0' --index-url https://download.pytorch.org/whl/cpu
 # 2. pip install 'numpy==1.26.4'
-# 3. pip install -r requirements-codex.txt
+# 3. pip install -r requirements.txt
 # 4. cd miniswe-agent && pip install -e . && cd ..
 #
 # Use a Python 3.13-supported NumPy release. SciPy 1.14 supports NumPy below

@@ -179,7 +179,7 @@ echo ""
 echo -e "${YELLOW}[8/9]${NC} Installing project dependencies..."
 echo "   This may take a few minutes..."
 
-pip install -r requirements-codex.txt -c "$CONSTRAINT_FILE" --quiet
+pip install -r requirements.txt -c "$CONSTRAINT_FILE" --quiet
 
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}✓${NC} All dependencies installed"

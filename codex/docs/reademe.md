@@ -139,7 +139,7 @@ This design makes Codex stateless per run (provider config is written fresh each
 
 - Install Codex CLI: `npm install -g @openai/codex-cli`
 - Create Python env: `python3 -m venv .venv-codex && source .venv-codex/bin/activate`
-- Install deps: `pip install -r requirements-codex.txt -r requirements-shared.txt litellm python-dotenv`
+- Install deps: `pip install -r requirements.txt -r requirements-shared.txt litellm python-dotenv`
 - Put keys in `.env` at repo root:
   - `OPENAI_API_KEY=...` (for GPT models)
   - `OPENROUTER_API_KEY=...` (for MiniMax via OpenRouter)

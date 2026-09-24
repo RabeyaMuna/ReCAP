@@ -28,7 +28,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--patches-file",
-        default="/Users/rabeyakhatunmuna/Documents/CI-REPAIR-BENCH/generated_patches_list/generated_patches_success_only.json",
+        default="generated_patches_list/generated_patches_success_only.json",
         help="Generated patches JSON used to select memory seeds by id or sha_fail",
     )
     parser.add_argument(
